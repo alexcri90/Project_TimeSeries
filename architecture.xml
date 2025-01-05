@@ -1,0 +1,172 @@
+<architecture>
+    <introduction>
+        <!-- 
+            The objective of this project is to produce forecasts for one month of missing hourly data (744 time points) in the ts2024.csv file. 
+            Three different modeling approaches will be explored:
+            1) ARIMA (AutoRegressive Integrated Moving Average)
+            2) UCM (Unobserved Components Model)
+            3) A Machine Learning model of choice (e.g., Random Forest, XGBoost, or a simple Neural Network).
+            The final deliverables include:
+            - A preliminary analysis report of the time series data and justifications for model selection.
+            - A CSV file (named 902064_YYYYMMDD.csv) containing predictions from each of the three models.
+        -->
+        The primary goal is to accurately fill in the missing hourly observations for X, using ARIMA, UCM, and a machine learning method. These forecasts will be compiled and sent via email as per the specified format.
+    </introduction>
+
+    <data_understanding>
+        <data_sources>
+            <source_1>
+                <name>ts2024.csv</name>
+                <description>
+                    This CSV contains hourly time series data with the following columns:
+                    - DateTime: the timestamp
+                    - Date: the date component
+                    - Hour: the hour component
+                    - X: the target variable to predict (last month is missing)
+                </description>
+                <fields>
+                    DateTime, Date, Hour, X
+                </fields>
+                <missing_data>
+                    The last month of values (744 hours) for X is missing and must be forecasted.
+                </missing_data>
+            </source_1>
+        </data_sources>
+
+        <dataset_description>
+            <!-- 
+                Briefly describe the structure and content of the ts2024.csv file, including any known seasonal or trend components.
+            -->
+            <time_granularity>Hourly</time_granularity>
+            <forecast_horizon>744 hours (approx. one month)</forecast_horizon>
+        </dataset_description>
+    </data_understanding>
+
+    <ingestion_and_preprocessing>
+        <data_loading>
+            <!-- 
+                Steps to read the CSV into a pandas DataFrame, parse the DateTime column, 
+                and ensure the data is indexed or easily handled for time series analysis.
+            -->
+            - Read ts2024.csv using pandas (e.g., pd.read_csv).
+            - Parse DateTime as a datetime object, set as an index if convenient.
+            - Verify correct parsing of the Date and Hour columns.
+        </data_loading>
+
+        <data_preprocessing>
+            <!-- 
+                Detail any transformations or cleaning steps needed before modeling.
+            -->
+            - Missing Data Handling: 
+              The last month of X is missing by design; no imputation is done for this segment since it will be forecasted.
+            - Outlier Detection (Optional): 
+              Identify and handle extreme or erroneous spikes in X that could bias the models.
+            - Stationarity Checks:
+              For ARIMA, ensure stationarity (or apply differencing). 
+            - Seasonal Decomposition:
+              Explore the presence of hourly/daily/weekly/monthly patterns (if needed).
+            - Scaling (Optional):
+              For certain ML models, scaling might improve performance (e.g., standardization or min-max scaling).
+        </data_preprocessing>
+    </ingestion_and_preprocessing>
+
+    <eda>
+        <statistical_analysis>
+            <!-- 
+                Basic descriptive statistics for the time series to understand mean, variance, trends, etc.
+            -->
+            - Descriptive Statistics: Compute mean, median, standard deviation of X.
+            - Correlation Checks (Optional): For additional variables if available.
+        </statistical_analysis>
+        <visualization>
+            <!-- 
+                Visualization steps to explore time series structure.
+            -->
+            - Time Series Plot: Plot X vs. DateTime to observe trends, seasonality, or anomalies.
+            - Autocorrelation and Partial Autocorrelation Plots: (ACF/PACF) to guide ARIMA model order.
+            - Seasonal Decomposition Plots (if relevant to highlight daily/weekly cycles).
+        </visualization>
+    </eda>
+
+    <model>
+        <selection>
+            <!-- 
+                Three models: ARIMA, UCM, and a chosen ML model (e.g., Random Forest, XGBoost, or MLP).
+            -->
+            <arima_family>
+                - ARIMA or SARIMA model, depending on seasonality.
+                - Order determination: Use AIC/BIC or stepwise selection methods to find p, d, q (and seasonal order if using SARIMA).
+            </arima_family>
+            <ucm_family>
+                - Unobserved Components Model to capture level, trend, seasonal, and irregular components.
+                - Evaluate model fit using likelihood-based metrics.
+            </ucm_family>
+            <ml_model_family>
+                <!-- 
+                    Example: Random Forest, XGBoost, or a simple feedforward NN. 
+                    Describe input features (lag features, rolling means, etc.).
+                -->
+                - Feature Engineering: Create lagged features (X_{t-1}, X_{t-24}, etc.) and rolling averages.
+                - Model Choice: For instance, Random Forest Regressor with tuned hyperparameters.
+            </ml_model_family>
+        </selection>
+
+        <training>
+            - Data Split:
+              * Use the historical portion of the time series for training and validation.
+              * Time-based split, ensuring no leakage from future to past.
+            - Hyperparameter Tuning:
+              * For ARIMA: vary (p, d, q) / (P, D, Q) and select best by AIC/BIC.
+              * For UCM: specify which components (trend, seasonal) best fit the data.
+              * For ML model: tune hyperparameters (e.g., # of trees, depth, learning rate).
+            - Evaluation:
+              * Train and validate each model on the known portion of the data.
+              * Use metrics such as MAE, RMSE, or MAPE to compare performance.
+        </training>
+
+        <evaluation>
+            <!-- 
+                Final selection will be guided by validation metrics and interpretability.
+            -->
+            - Model Comparison: Compare ARIMA, UCM, and ML approach based on validation errors.
+            - Residual Diagnostics: Check error autocorrelation, distribution, and magnitude across time.
+            - Final Model Selection: While all three models will be used for the final submission, highlight which one performs best and potential reasons why.
+        </evaluation>
+    </model>
+
+    <workflow_pipeline>
+        <data_pipeline>
+            <!-- 
+                Steps for data ingestion and preprocessing.
+            -->
+            Step 1: Load the ts2024.csv file, parse date/time information, handle outliers if necessary.
+            Step 2: Split data into training and validation sets (leaving the last month of data as missing for final forecast).
+        </data_pipeline>
+
+        <model_pipeline>
+            <!-- 
+                Steps for model development, training, and forecasting.
+            -->
+            Step 3: Define ARIMA-based scripts (auto order selection or manual).
+            Step 4: Define UCM-based scripts to capture trend and seasonality.
+            Step 5: Define ML-based scripts (feature engineering + model training).
+            Step 6: Hyperparameter tuning and cross-validation for each approach.
+            Step 7: Generate final forecasts for the last month (744 hours).
+        </model_pipeline>
+
+        <results_pipeline>
+            <!-- 
+                Steps for comparing, reporting, and exporting final predictions.
+            -->
+            Step 8: Compare model results using validation metrics (MAE, RMSE, etc.).
+            Step 9: Create a preliminary analysis report including:
+                - EDA findings
+                - Model selection rationale
+                - Forecast performance
+            Step 10: Generate final CSV with the format:
+                DateTime | ARIMA | UCM | ML
+              Name this file 902064_YYYYMMDD.csv (with YYYYMMDD = submission date).
+              Send it via email as required.
+        </results_pipeline>
+    </workflow_pipeline>
+</architecture>
