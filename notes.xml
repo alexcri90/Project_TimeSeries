@@ -1,0 +1,4 @@
+<notes>
+    <dataset id=1>
+        <data>7129, 7130, 16033, 16034</data>
+        <note>Decided to take the mean of the duplicate timestamps.</note>

@@ -1,0 +1,1333 @@
+# LAB 1
+
+plot(AirPassengers)
+
+ly <- log(AirPassengers)
+
+plot(ly)
+
+time(AirPassengers)
+
+means <- tapply(AirPassengers,
+                floor(time(AirPassengers)),
+                mean)
+
+sds <- tapply(AirPassengers,
+                floor(time(AirPassengers)),
+                sd)
+
+plot(x = means, y = sds)
+
+lmeans <- tapply(ly,
+                floor(time(AirPassengers)),
+                mean)
+
+lsds <- tapply(ly,
+            floor(time(AirPassengers)),
+            sd)
+
+plot(x = lmeans, y = lsds)
+
+plot(diff(ly, 12))
+
+t <- 1:length(ly)
+
+reg1 <- lm(ly~t)
+
+summary(reg1)
+
+plot(ly)
+
+# LAB 2
+
+ly <- log(AirPassengers)
+ly0 <- ly[1:120]
+
+vt <- 1:length(ly)
+
+seas_dum <- function(n, frequency, zero_mean = FALSE) {
+  t <- 0:(n-1)
+  j <- 1:frequency
+  S <- outer(t, j,
+             function(x, y)
+               as.integer((x %% frequency) == (y-1)))
+  if (zero_mean) {
+    S[S == 0] <- -1/(frequency - 1)
+  }
+  S
+}
+
+mS <- seas_dum(length(ly), frequency(ly))
+
+X <- cbind(ly, vt, mS[, -12])
+colnames(X) <- c("ly", "vt", paste0("month", 1:11))
+X <- as.data.frame(X)
+
+reg2 <- lm(ly ~ ., data = X[1:120, ])
+summary(reg2)
+
+pre2 <- predict(reg2, X[121:144, ])
+pre_conf2 <- predict(reg2, X[121:144, ],
+                     interval = "conf")
+
+pre_pred2 <- predict(reg2, X[121:144, ],
+                     interval = "pred")
+
+plot(ly[121:144])
+lines(pre2, col = "red")
+
+XX <- cbind(X, vt2 = vt^2)
+reg3 <- lm(ly~ ., data = XX[1:120, ])
+summary(reg3)
+
+pre3 <- predict(reg3, XX[121:144, ])
+lines(pre3, col = "blue")
+
+trend <- as.matrix(XX[, c("vt", "vt2")]) %*%
+  reg3$coefficients[c("vt", "vt2")] +
+  reg3$coefficients[1]
+
+plot(as.numeric(ly))
+lines(trend, col = "red")
+
+XXX <- XX
+XXX[, 3:13] <- seas_dum(144, 12, TRUE)[, -12]
+View(XXX[, 3:13])
+
+reg4 <- lm(ly~ ., data = XXX[1:120, ])
+summary(reg3)
+summary(reg4)
+trend4 <- as.matrix(XXX[, c("vt", "vt2")]) %*%
+  reg4$coefficients[c("vt", "vt2")] +
+  reg4$coefficients[1]
+
+lines(trend4, col = "blue")
+abline(v = 120.5, lty = 3)
+
+# LAB 3
+
+ly <- log(AirPassengers)
+ly0 <- ly[1:120]
+
+X <- data.frame(ly = ly[],
+                t = 1:144,
+                t2 = (1:144)^2)
+
+om_jt <- outer(1:144, 1:6)*2*pi/12
+
+co <- cos(om_jt)
+si <- sin(om_jt)[, -6]
+
+matplot(co[1:12, ], type="l")
+matplot(si[1:12, ], type="l")
+
+X <- cbind(X, cos = co, sin = si)
+
+reg_trig <- lm(ly ~ ., data = X[1:120, ])
+
+reg_trig |> summary()
+
+pred_trig <- predict(reg_trig, X[121:144,])
+
+plot(ly[121:144])
+lines(pred_trig, col = "red")
+
+plot(AirPassengers[121:144])
+lines(exp(pred_trig), col = "red")
+
+plot(
+  density(reg_trig$resid)
+)
+
+curve(dnorm(x, mean = 0,
+            sd = sd(reg_trig$residuals)),
+      add = TRUE, col = "red")
+
+mse_exp <- mean(
+  (AirPassengers[121:144]-
+                   exp(pred_trig))^2)
+
+pre_trig_c <- predict(
+  reg_trig,
+  X[121:144,],
+  se.fit = TRUE
+)
+
+pred <- exp(
+ pre_trig_c$fit +
+   0.5 * pre_trig_c$se.fit^2
+)
+
+plot(AirPassengers[121:144])
+lines(exp(pred_trig), col = "red")
+lines(pred, col = "blue")
+
+mse_exp_c <- mean(
+  (
+    AirPassengers[121:144] - pred
+  )^2
+)
+
+library(forecast)
+
+Acf(reg_trig$residuals)
+
+XX <- as.matrix(X[, -1])
+
+mod1 <- Arima(
+  AirPassengers[1:120],
+  order = c(1, 0, 0),
+  xreg = XX[1:120, ],
+  lambda = 0,
+  biasadj = TRUE
+)
+
+mod1 |> summary()
+
+Acf(mod1$residuals)
+
+pre_mod1 <- forecast(
+  mod1,
+  24,
+  xreg = XX[121:144, ]
+)
+
+plot(pre_mod1)
+
+mse_mod1 <- mean(
+  (
+    AirPassengers[121:144]-
+      pre_mod1$mean
+  )^2
+)
+
+mse_exp_c
+mse_mod1
+
+# LAB 4
+
+library(forecast)
+
+n <- 200
+eps <- rnorm(n)
+
+plot(eps, type = "l")
+
+Acf(eps)
+Box.test(eps, 24, "Ljung")
+
+y <- stats::filter(eps,
+                   -1.1,
+                   "recursive")
+plot(y, type = "l")
+
+# LAB 5
+
+library(forecast)
+
+phis <- c(phi1 = 1.5,
+          phi2 = -0.7)
+
+polyroot(c(1, -phis)) |> Mod()
+
+eps <- rnorm(200)
+
+y <- filter(eps, phis, "recursive")
+
+plot(y, type = "l")
+Acf(y, 50)
+Pacf(y, 50)
+
+w <- diff(y)
+plot(w, type = "l")
+Acf(w, 50)
+
+sunspot.year |> plot()
+
+sunspot.year |> log() |> plot()
+
+lambda <- BoxCox.lambda(1+sunspot.year, "loglik")
+
+sun <- BoxCox(sunspot.year, lambda)
+plot(sun)
+
+Acf(sun, 40)
+Pacf(sun, 40)
+
+mod1 <- Arima(
+  sunspot.year,
+  c(3, 0, 0),
+  lambda = lambda
+)
+
+mod2 <- Arima(
+  sunspot.year,
+  c(2, 0, 0),
+  lambda = lambda
+)
+
+mod1
+mod2
+
+polyroot(c(1, -mod1$coef[1:3])) |> Mod()
+
+# -------
+
+rw1 <- filter(eps, 1, "recursive") # y_t = y_{t-1} + \eps_t
+rw2 <- cumsum(eps)                 # y_t = \sum_{s=1}^t \eps_s
+
+cbind(rw1, rw2)
+
+plot(rw1)
+
+rw_mod <- Arima(rw1, c(1, 0, 0))
+rw_mod
+
+y <- log(AirPassengers)
+plot(y)
+
+plot(diff(y))
+plot(diff(y, 12))
+
+diff(y, 12) |> Acf(36)
+diff(y, 12) |> Pacf(36)
+
+# ARIMA(2, 0, 0)(0, 1, 0)_12 with constant on log
+air1 <- Arima(
+  window(AirPassengers, end = c(1958, 12)),
+  c(2, 0, 0),
+  list(order = c(0, 1, 0), period = 12),
+  include.constant = TRUE,
+  lambda = 0
+)
+
+air1
+
+air1$residuals |> Acf(36)
+air1$residuals |> Pacf(36)
+
+
+air2 <- Arima(
+  window(AirPassengers, end = c(1958, 12)),
+  c(2, 0, 0),
+  list(order = c(1, 1, 0), period = 12),
+  include.constant = TRUE,
+  lambda = 0
+)
+
+air2
+
+air2$residuals |> Acf(36)
+air2$residuals |> Pacf(36)
+
+forecast(air2, 24) |> plot()
+lines(AirPassengers)
+
+# LAB 6
+
+n <- 2000
+s <- 4
+PHI1 <- 0.6
+PHI2 <- 0.3
+
+eps <- rnorm(n)
+
+y <- filter(
+  eps,
+  c(0, 0, 0, PHI1, 0, 0, 0, PHI2),
+  "recursive"
+) |> ts(start = c(1, 1),
+        frequency = 4)
+
+
+plot(y)
+
+Acf(y, 40)
+Pacf(y, 40)
+
+# ---------
+
+y <- window(log(AirPassengers),
+            end = c(1958, 12))
+
+plot(y)
+
+Y <- matrix(y, 10, 12, byrow = TRUE)
+matplot(Y, type = "l")
+matplot(t(Y), type = "l")
+
+Acf(y, 36)
+Pacf(y, 36)
+
+D12y <- diff(y, 12)
+
+plot(D12y)
+
+urca::ur.df(D12y, "drift", 12, "AIC") |>
+  urca::summary()
+
+urca::ur.df(diff(D12y), "drift", 12, "AIC") |>
+  urca::summary()
+
+urca::ur.kpss(D12y, "tau") |>
+  urca::summary()
+
+Acf(D12y, 36)
+Pacf(D12y, 36)
+
+mod1 <- Arima(
+  window(AirPassengers, end = c(1958, 12)),
+  c(2, 0, 0),
+  c(0, 1, 0),
+  lambda = 0
+)
+
+Acf(mod1$residuals, 36)
+Pacf(mod1$residuals, 36)
+
+mod2 <- Arima(
+  window(AirPassengers, end = c(1958, 12)),
+  c(2, 0, 0),
+  c(0, 1, 1),
+  lambda = 0
+)
+
+Acf(mod2$residuals, 36)
+Pacf(mod2$residuals, 36)
+
+# LAB 7
+
+library(forecast)
+
+y <- window(log(AirPassengers),
+            end = c(1958, 12))
+
+D12y <- diff(y, 12)
+
+Acf(D12y, 36)
+Pacf(D12y, 36)
+
+mod1 <- Arima(
+  window(AirPassengers,
+         end = c(1958, 12)),
+  c(2, 0, 0),
+  c(0, 1, 0),
+  include.constant = TRUE,
+  lambda = 0
+)
+
+mod1
+
+Acf(mod1$residuals, 36)
+Pacf(mod1$residuals, 36)
+
+mod1 <- Arima(
+  window(AirPassengers,
+         end = c(1958, 12)),
+  c(2, 0, 0),
+  c(0, 1, 1),
+  include.constant = TRUE,
+  lambda = 0
+)
+
+Acf(mod1$residuals, 36)
+Pacf(mod1$residuals, 36)
+
+Box.test(mod1$residuals,
+         lag = 36,
+         type = "Ljung-Box",
+         fitdf = 4
+         )
+
+mod1
+
+DD12y <- diff(D12y)
+plot(DD12y)
+
+Acf(DD12y, 36)
+Pacf(DD12y, 36)
+
+mod2 <- Arima(
+  window(AirPassengers,
+         end = c(1958, 12)),
+  c(0, 1, 1),
+  c(0, 1, 1),
+  include.constant = TRUE,
+  lambda = 0
+)
+
+Acf(mod2$residuals, 36)
+Pacf(mod2$residuals, 36)
+
+Box.test(mod2$residuals,
+         lag = 36,
+         type = "Ljung-Box",
+         fitdf = 4
+)
+
+mod1
+mod2
+
+pre1 <- forecast(mod1, 24)
+pre2 <- forecast(mod2, 24)
+
+rmse <- function(x, y) sqrt(mean((x-y)^2))
+
+rmse(window(AirPassengers, start = c(1959, 1)),
+     pre1$mean)
+
+rmse(window(AirPassengers, start = c(1959, 1)),
+     pre2$mean)
+
+plot(window(AirPassengers, start = c(1959, 1)))
+lines(pre1$mean, col = "red")
+lines(pre2$mean, col = "blue")
+
+# ------
+autoplot(sunspot.month)
+
+means <- tapply(
+  sunspot.month,
+  floor(time(sunspot.month)),
+  mean
+)
+
+sds <- tapply(
+  sunspot.month,
+  floor(time(sunspot.month)),
+  sd
+)
+
+plot(means, sds)
+
+plot(log(sunspot.month+5))
+
+x <- window(log(sunspot.month+5),
+            end = c(2010, 12))
+
+plot(x)
+
+library(urca)
+
+ur.df(x, type = "drift",
+      lags = 24,
+      "AIC") |> summary()
+
+ur.kpss(x, "tau", lags = "long") |>
+  summary()
+
+Acf(x, 120)
+Pacf(x, 120)
+
+arma1 <- Arima(
+  x,
+  c(5, 0, 0),
+  c(0, 0, 0)
+)
+
+arma1
+
+Acf(arma1$residuals, lag.max = 120)
+Pacf(arma1$residuals, lag.max = 120)
+
+
+arma1 <- Arima(
+  x,
+  c(12, 0, 12),
+  c(0, 0, 0),
+  method = "CSS"
+)
+
+Acf(arma1$residuals, lag.max = 120)
+Pacf(arma1$residuals, lag.max = 120)
+Box.test(arma1$residuals, 120, "Ljung",
+         25)
+
+arma1
+
+plot(window(log(sunspot.month+5),c(2011, 1)))
+lines(forecast(arma1, 33)$mean, col = "red")
+
+arma2 <- Arima(
+  x,
+  c(2, 0, 1),
+  c(0, 0, 0),
+  method = "CSS"
+)
+lines(forecast(arma2, 33)$mean, col = "blue")
+
+# -----
+setwd("C:/Users/dems5.A83423/Downloads")
+x <- read.csv("injured.csv")
+
+x <- ts(x$feriti_strada,
+        start = c(2001, 1),
+        frequency = 12)
+
+plot(x)
+
+means <- tapply(
+  x,
+  floor(time(x)),
+  mean
+)
+
+sds <- tapply(
+  x,
+  floor(time(x)),
+  sd
+)
+
+plot(means, sds)
+
+plot(x)
+
+plot(diff(x, 12))
+
+x0 <- window(x, end = c(2012, 12))
+
+Acf(diff(x0, 12), 36)
+Pacf(diff(x0, 12), 36)
+
+inj1 <- Arima(
+  x0,
+  c(1, 0, 0),
+  c(0, 1, 1),
+  include.constant = TRUE
+)
+
+Acf(inj1$residuals, 36)
+Pacf(inj1$residuals, 36)
+
+Box.test(inj1$residuals,
+         36, "Ljung",
+         3)
+
+inj1
+
+step <- rep(0, 156)
+step[31:length(step)] <- 1
+step
+
+inj2 <- Arima(
+  x0,
+  c(1, 0, 0),
+  c(0, 1, 1),
+  xreg = step[1:144],
+  include.constant = TRUE
+)
+
+inj2
+
+inj_pre1 <- forecast(inj1, 12)
+inj_pre2 <- forecast(inj2, 12,
+                     xreg = step[145:156])
+
+x1 <- window(x, start = c(2013, 1))
+
+rmse(x1, inj_pre1$mean)
+rmse(x1, inj_pre2$mean)
+
+plot(x1)
+lines(inj_pre1$mean, col = "red")
+lines(inj_pre2$mean, col = "blue")
+
+# LAB 8
+
+library(dplyr)
+library(ggplot2)
+library(xts)
+library(forecast)
+
+dt <- read.csv("elettro_quant.csv")
+
+dt |>
+  filter(date <= 20171231) |>
+  select(load) |>
+  pull(load) |>
+  plot(type = "l")
+
+dt |>
+  filter(date <= 20160131) |>
+  select(load) |>
+  pull(load) |>
+  plot(type = "l")
+
+dt |>
+  mutate(date = as.Date(as.character(date),
+                        format = "%Y%m%d")) ->
+  dt
+
+dt |>
+  mutate(month = lubridate::month(date),
+         day = lubridate::wday(date)) ->
+  dt
+
+dt |>
+  filter(day == 3,
+         date >= "2016-01-15",
+         date < "2016-01-22") |>
+  pull(load) ->
+  winter3
+
+dt |>
+  filter(day == 3,
+         date >= "2016-07-15",
+         date < "2016-07-22") |>
+  pull(load) ->
+  summer3
+
+cbind(winter3, summer3) |>
+  matplot(type = "l", lwd = 2)
+
+dt |>
+  filter(hour == 12) |>
+  select(date, load) ->
+  wdt
+
+y <- xts(wdt$load, wdt$date)
+
+plot(y["/2019-12-31"])
+
+Acf(y["/2019-12-31"], 366)
+Pacf(y["/2019-12-31"], 366)
+
+Acf(diff(y["/2019-12-31"], 7), 366)
+Pacf(diff(y["/2019-12-31"], 7), 366)
+
+vt <- 1:length(y["/2020-02-28"])
+vj <- 1:16
+
+freq <- outer(vt, vj)*2*pi/365.25
+X <- cbind(
+  cos(freq),
+  sin(freq)
+)
+
+mod1 <- Arima(y["/2019-12-31"],
+  c(3, 0, 0),
+  list(order = c(0, 1, 1), period = 7),
+  xreg = X[1:1461,]
+)
+
+mod1
+
+Acf(mod1$residuals, 366)
+Pacf(mod1$residuals, 366)
+
+pre1 <- forecast(
+  mod1,
+  xreg = X[-(1:1461),]
+)
+
+pre1 |> plot(include = 0)
+lines(x = 1462:1520,
+  as.numeric(y["2020-01-01/2020-02-28"]))
+
+library(lubridate)
+
+wvac <- ((month(y) == 12) & (day(y) >= 22)) |
+  ((month(y) == 1) & (day(y) <= 6)) |> as.numeric()
+
+svac <- (month(y) == 8) |> as.numeric()
+
+mod2 <- Arima(y["/2019-12-31"],
+              c(3, 0, 0),
+              list(order = c(0, 1, 1), period = 7),
+              xreg = cbind(X[1:1461,],
+                           svac = svac[1:1461],
+                           wvac = wvac[1:1461])
+)
+
+mod2
+
+Acf(mod2$residuals, 366)
+Pacf(mod2$residuals, 366)
+
+pre2 <- forecast(
+  mod2,
+  xreg = cbind(X[1462:1520,],
+               svac = svac[1462:1520],
+               wvac = wvac[1462:1520]))
+
+
+pre2 |> plot(include = 0)
+lines(x = 1462:1520,
+      as.numeric(y["2020-01-01/2020-02-28"]))
+lines(x = 1462:1520, pre1$mean, col = "red")
+
+# LAB 9
+
+library(dplyr)
+library(ggplot2)
+library(xts)
+library(forecast)
+
+dt <- read.csv("elettro_quant.csv")
+
+dt |>
+  filter(date <= 20171231) |>
+  select(load) |>
+  pull(load) |>
+  plot(type = "l")
+
+dt |>
+  filter(date <= 20160131) |>
+  select(load) |>
+  pull(load) |>
+  plot(type = "l")
+
+dt |>
+  mutate(date = as.Date(as.character(date),
+                        format = "%Y%m%d")) ->
+  dt
+
+dt |>
+  mutate(month = lubridate::month(date),
+         day = lubridate::wday(date)) ->
+  dt
+
+dt |>
+  filter(day == 3,
+         date >= "2016-01-15",
+         date < "2016-01-22") |>
+  pull(load) ->
+  winter3
+
+dt |>
+  filter(day == 3,
+         date >= "2016-07-15",
+         date < "2016-07-22") |>
+  pull(load) ->
+  summer3
+
+cbind(winter3, summer3) |>
+  matplot(type = "l", lwd = 2)
+
+dt |>
+  filter(hour == 12) |>
+  select(date, load) ->
+  wdt
+
+y <- xts(wdt$load, wdt$date)
+
+plot(y["/2019-12-31"])
+
+Acf(y["/2019-12-31"], 366)
+Pacf(y["/2019-12-31"], 366)
+
+Acf(diff(y["/2019-12-31"], 7), 366)
+Pacf(diff(y["/2019-12-31"], 7), 366)
+
+vt <- 1:length(y["/2020-02-28"])
+vj <- 1:16
+
+freq <- outer(vt, vj)*2*pi/365.25
+X <- cbind(
+  cos(freq),
+  sin(freq)
+)
+
+mod1 <- Arima(y["/2019-12-31"],
+  c(3, 0, 0),
+  list(order = c(0, 1, 1), period = 7),
+  xreg = X[1:1461,]
+)
+
+mod1
+
+Acf(mod1$residuals, 366)
+Pacf(mod1$residuals, 366)
+
+pre1 <- forecast(
+  mod1,
+  xreg = X[-(1:1461),]
+)
+
+pre1 |> plot(include = 0)
+lines(x = 1462:1520,
+  as.numeric(y["2020-01-01/2020-02-28"]))
+
+library(lubridate)
+
+wvac <- ((month(y) == 12) & (day(y) >= 22)) |
+  ((month(y) == 1) & (day(y) <= 6)) |> as.numeric()
+
+svac <- (month(y) == 8) |> as.numeric()
+
+mod2 <- Arima(y["/2019-12-31"],
+              c(3, 0, 0),
+              list(order = c(0, 1, 1), period = 7),
+              xreg = cbind(X[1:1461,],
+                           svac = svac[1:1461],
+                           wvac = wvac[1:1461])
+)
+
+mod2
+
+Acf(mod2$residuals, 366)
+Pacf(mod2$residuals, 366)
+
+pre2 <- forecast(
+  mod2,
+  xreg = cbind(X[1462:1520,],
+               svac = svac[1462:1520],
+               wvac = wvac[1462:1520]))
+
+
+pre2 |> plot(include = 0)
+lines(x = 1462:1520,
+      as.numeric(y["2020-01-01/2020-02-28"]))
+lines(x = 1462:1520, pre1$mean, col = "red")
+
+# LAB 10
+
+library(KFAS)
+
+plot(Nile)
+
+mod1 <- SSModel(
+  Nile ~ 0 + SSMtrend(2, list(NA, NA)),
+  H = NA
+)
+
+mod1$T
+mod1$Q
+mod1$R
+mod1$Z
+mod1$P1inf
+
+vy <- var(Nile)
+
+fit1 <- fitSSM(mod1,
+               log(c(vy/10, vy/1000, vy/5)))
+
+
+exp(fit1$optim.out$par) |> round(2)
+fit1$model$Q
+
+# LAB 12
+
+R <- function(lambda) {
+  co <- cos(lambda)
+  si <- sin(lambda)
+  matrix(
+    c(co, -si, si, co),
+    2, 2
+  )
+}
+
+cycle_sim <- function(n, rho, lambda, sigk,
+                      psi0 = c(1, 0)) {
+  K <- matrix(rnorm(2*n, sd = sigk), n, 2)
+  PSI <- matrix(0, n+1, 2,
+                dimnames = list(NULL, c("psi", "psi*")))
+  PSI[1, ] <- psi0
+  for (t in 2:(n+1)) {
+    PSI[t, ] <- PSI[t-1, ] %*% R(-lambda)*rho + K[t-1, ]
+  }
+  PSI
+}
+
+lambda <- 2*pi/40
+
+cycle_sim(200, 1, lambda, 1, c(1, 0)) |>
+  ts() |> plot()
+abline(v = c(40, 80, 120))
+
+cycle_sim(50, 0.99, 0.5, 1,
+          c(sqrt(1/(1-0.99^2)), 0)) |>
+  plot(type = "l")
+
+period <- 2*pi/0.5
+
+# Application of cycle to Sunspot
+library(KFAS)
+y <- sunspot.year
+y[270:289] <- NA
+plot(y)
+
+mod1 <- SSModel(
+  y ~ 0 + SSMtrend(1, NA) +
+    SSMcycle(11, Q = NA, damping = 0.9,
+             P1inf = matrix(0, 2, 2)),
+  H = NA
+)
+
+mod1$T
+mod1$Q
+
+logit <- function(x) 1/(1+exp(-x))
+curve(logit, -5, 5)
+
+# pars[1] log-var(eta)
+# pars[2] log-vars(kappa)
+# pars[3] log-vars(eps)
+# pars[4] logit(rho)
+# pars[5] period
+updt1 <- function(pars, model) {
+  model$Q[1, 1, 1] <- exp(pars[1])
+  model$Q[2, 2, 1] <- model$Q[3, 3, 1] <- exp(pars[2])
+  rho <- logit(pars[4])
+  lambda <- 2*pi/pars[5]
+  co <- rho*cos(lambda)
+  si <- rho*sin(lambda)
+  model$T[2, 2, 1] <- model$T[3, 3, 1] <- co
+  model$T[3, 2, 1] <- -si
+  model$T[2, 3, 1] <- si
+  model$P1[2, 2] <- model$P1[3, 3] <- exp(pars[2])/(1-rho^2)
+  model$H[1, 1, 1] <- exp(pars[3])
+  model
+}
+
+vy <- var(y, na.rm = TRUE)
+init <- c(log(vy/100),
+          log(vy/10),
+          log(vy/10),
+          2.2,
+          11)
+
+fit1 <- fitSSM(mod1, init, updt1)
+fit1$optim.out$convergence
+
+logit(fit1$optim.out$par[4])
+fit1$optim.out$par[5]
+fit1$model$Q
+
+kfs1 <- KFS(fit1$model,
+            filtering = c("state", "signal"),
+            smoothing = c("state", "signal"))
+
+plot(sunspot.year)
+lines(kfs1$alphahat[, "level"], col ="red")
+lines(kfs1$alphahat[, "level"]+kfs1$alphahat[, "cycle"],
+      col ="blue")
+
+# LAB 13
+
+library(dplyr)
+library(xts)
+library(KFAS)
+
+dt <- read.csv("elettro_quant.csv")
+
+dt |>
+  filter(hour == 12) |>
+  pull(load) ->
+  y
+
+y <- xts(y,
+         as.Date(as.character(dt$date[dt$hour==12]),
+                 format = "%Y%m%d"))
+
+plot(y)
+
+y0 <- y
+y0[3001:3074] <- NA
+
+y0 <- as.numeric(y0)
+
+mod1 <- SSModel(
+  y0[2001:3074] ~ 0 +
+    SSMtrend(2, list(NA, NA)) +
+    SSMseasonal(7, NA, "dummy") +
+    SSMseasonal(365, NA, "trig", harmonics = 1:6),
+  H = NA
+)
+
+# pars[1] log-var(eta) (level's wn)
+# pars[2] log-var(zeta) (slope's wn)
+# pars[3] log-var(omega7) (7-days seasonal component)
+# pars[4] log-var(omega365) (365-days seasonal component)
+# pars[5] log-var(eps) (observation noise)
+
+updt1 <- function(pars, model) {
+  model$Q[1, 1, 1] <- exp(pars[1])
+  model$Q[2, 2, 1] <- exp(pars[2])
+  model$Q[3, 3, 1] <- exp(pars[3])
+  diag(model$Q[4:15, 4:15, 1]) <- exp(pars[4])
+  model$H[1, 1, 1] <- exp(pars[5])
+  model
+}
+
+vy <- var(y0, na.rm = TRUE)
+
+inits <- log(c(log_var_eta = vy/100,
+               log_var_zeta = vy/10000,
+               log_var_omega7 = vy/100000,
+               log_var_omega365 = 10,
+               log_var_eps = y/10))
+
+fit1 <- fitSSM(
+  mod1,
+  inits,
+  updt1,
+  method = "BFGS",
+  control = list(trace = 6)
+)
+
+# LAB 14
+
+library(KFAS)
+
+mod1 <- SSModel(
+  Nile ~ SSMtrend(2, list(NA, NA)),
+  H = NA
+)
+
+vy <- var(Nile)
+inits <- log(c(vy/10, vy/100, vy/10))
+
+fit1 <- fitSSM(
+  mod1,
+  inits
+)
+
+fit1$optim.out$convergence
+
+exp(fit1$optim.out$par)
+
+smo1 <- KFS(
+  fit1$model,
+  filtering = c("state", "signal"),
+  smoothing = c("state", "signal",
+                "disturbance")
+)
+
+plot(smo1$etahat)
+plot(smo1$epshat)
+
+aux_res_eta <- rstandard(
+  smo1,
+  "state"
+)
+
+plot(aux_res_eta[, "level"])
+abline(h = c(-3, 3), lty = 2)
+
+plot(aux_res_eta[, "slope"])
+abline(h = c(-3, 3), lty = 2)
+
+ndx <- which(
+  abs(aux_res_eta[, "level"])>3
+  ) + 1
+
+plot(Nile)
+abline(v = time(Nile)[ndx], lty = 2)
+lines(smo1$alphahat[, "level"], col ="red")
+
+step <- Nile
+step[] <- 0
+step[ndx:length(step)] <- 1
+
+mod2 <- SSModel(
+  Nile ~ step +
+    SSMtrend(2, list(NA, NA)),
+  H = NA
+)
+
+vy <- var(Nile)
+inits <- log(c(vy/10, vy/100, vy/10))
+
+fit2 <- fitSSM(
+  mod2,
+  fit1$optim.out$par
+)
+
+fit2$optim.out$convergence
+
+exp(fit2$optim.out$par)
+
+smo2 <- KFS(
+  fit2$model,
+  filtering = c("state", "signal"),
+  smoothing = c("state", "signal",
+                "disturbance")
+)
+
+plot(Nile)
+lines(smo2$alphahat[, "level"]+
+        smo2$alphahat[, "step"]*step,
+      col = "red")
+
+aux_res_eps <- rstandard(
+  smo2,
+  "pearson"
+)
+
+plot(aux_res_eps)
+abline(h = c(-3, 3), lty = 2)
+
+ao_ndx <- which(
+  abs(aux_res_eps) > 3
+)
+
+std_innov <- rstandard(
+  smo2,
+  "recursive"
+)
+
+plot(std_innov)
+
+acf(std_innov,
+    na.action = na.pass)
+pacf(std_innov,
+    na.action = na.pass)
+
+pulse <- Nile
+pulse[] <- 0
+pulse[ao_ndx] <- 1
+
+
+mod3 <- SSModel(
+  Nile ~ step + pulse +
+    SSMtrend(2, list(NA, NA)),
+  H = NA
+)
+
+fit3 <- fitSSM(
+  mod3,
+  fit2$optim.out$par
+)
+
+fit3$optim.out$convergence
+
+exp(fit2$optim.out$par)
+exp(fit3$optim.out$par)
+
+smo3 <- KFS(
+  fit2$model,
+  filtering = c("state", "signal"),
+  smoothing = c("state", "signal",
+                "disturbance")
+)
+
+plot(Nile)
+lines(smo3$alphahat[, "level"]+
+        smo3$alphahat[, "step"]*step,
+      col = "red")
+
+# LAB 15
+
+library(splines)
+library(glmnet)
+library(forecast)
+
+n <- 200
+
+x <- sort(runif(n))
+
+fx <- cos(2*pi*x) +
+  exp(-x)*5 +
+  0.1/(0.01+x) +
+  sin(2*pi/3*x)*6
+
+plot(x, fx, type = "l")
+
+y <- fx + rnorm(n)
+
+points(x, y)
+
+X <- bs(x, 5)
+Z <- bs(x, 6, intercept = TRUE)
+matplot(x=x, y=X, type = "l")
+matplot(x=x, y=Z, type = "l")
+
+reg1 <- lm(y~X)
+summary(reg1)
+
+plot(x, y)
+lines(x, fx, col="blue")
+lines(x, reg1$fitted.values, col = "red")
+
+reg2 <- lm(y~bs(x, 10))
+lines(x, reg2$fitted.values, col = "green")
+
+reg3 <- cv.glmnet(x = bs(x, 20), y = y)
+reg3 <- glmnet(x = bs(x, 20), y = y,
+               lambda = reg3$lambda.1se)
+lines(x, predict(reg3, newx = bs(x, 20)),
+      col = "purple")
+
+# --------
+
+S <- matrix(c(1, 0.7, 0.7, 1), 2, 2)
+
+x1 <- sort(runif(n, -1, 1))
+x2 <- sort(runif(n, -1, 1))
+vx <- cbind(x1, x2)
+fx <- apply(vx, 1,
+            function(x) {exp(-t(x)%*%
+                solve(S) %*% x)}
+            )
+w <- fx+rnorm(n, sd = 0.2)
+
+plot(x1, w)
+
+reg3 <- lm(w~(bs(x1, 3)+bs(x2, 3))^2)
+summary(reg3)
+
+library(glmnet)
+
+XX <- model.matrix(w~0+(bs(x1, 3)+bs(x2, 3))^2)
+
+glm1 <- cv.glmnet(x = XX, y = y)
+glm1
+
+plot(glm1)
+
+glm1$
+  
+glm2 <- glmnet(XX, y,
+               lambda = glm1$lambda.min)
+
+glm2$beta
+
+# CV for time series
+
+tscv <- function(fcstfn, y,
+                 start = floor(length(y)/2),
+                 h = 1) {
+  n <- length(y)
+  pre_y <- matrix(0, n-start, h)
+  pre_err <- pre_y
+  yy <- c(y, rep(NA, h))
+  for (t in start:(n-1)) {
+    pre_y[t+1-start, ] <- fcstfn(y[1:t], h)
+    pre_err[t+1-start, ] <-
+      yy[(t+1):(t+h)] - pre_y[t+1-start, ]
+  }
+  pre_err
+}
+
+y <- log(AirPassengers)
+modfcst <- function(y, h) {
+  mod <- Arima(y = y,
+        order = c(2, 0, 0),
+        seasonal = list(order = c(0, 1, 1),
+                        period = 12),
+        include.constant = TRUE,
+        lambda = 0)
+  forecast(mod, h = h)$mean
+}
+
+modfcst(y = AirPassengers, h = 12)
+
+out <- tscv(modfcst, AirPassengers, h = 12)
+
+colMeans(abs(out), na.rm = TRUE) |> plot()
+
+airlinefcst <- function(y, h) {
+  mod <- Arima(y = y,
+               order = c(0, 1, 1),
+               seasonal = list(order = c(0, 1, 1),
+                               period = 12),
+               lambda = 0)
+  forecast(mod, h = h)$mean
+}
+
+out_air <- tscv(airlinefcst, AirPassengers, h = 12)
+
+colMeans(abs(out), na.rm = TRUE) |> plot()
+colMeans(abs(out_air), na.rm = TRUE) |>
+  points(col = "red")

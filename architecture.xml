@@ -18,7 +18,7 @@
             <source_1>
                 <name>ts2024.csv</name>
                 <description>
-                    This CSV contains hourly time series data with the following columns:
+                    This CSV contains hourly time series data regarding traffic congestion indicator for a freeway in a large U.S. city with the following columns:
                     - DateTime: the timestamp
                     - Date: the date component
                     - Hour: the hour component

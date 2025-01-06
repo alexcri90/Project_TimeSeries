@@ -1,0 +1,5 @@
+# everything inside the .venv directory
+.venv/
+solution/*
+!solution/*.csv
+
