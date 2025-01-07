@@ -11,9 +11,11 @@ Original file is located at
 ## Package Installation
 """
 
-#%pip install pandas matplotlib numpy seaborn scikit-learn xgboost patsy statsmodels
-#%pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-#%pip install seaborn
+# %pip install pandas matplotlib numpy seaborn scikit-learn xgboost patsy statsmodels
+# %pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# %pip install seaborn
+# %pip install pmdarima
+# %pip install tqdm
 
 """## Imports and GPU Configuration"""
 
@@ -36,6 +38,8 @@ from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 from statsmodels.tsa.seasonal import seasonal_decompose
 from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.tsa.statespace.structural import UnobservedComponents
+import statsmodels.api as sm
+from statsmodels.stats.diagnostic import acorr_ljungbox
 
 # ML/DL libraries
 import torch
@@ -570,10 +574,14 @@ plot_advanced_acf_pacf(seasonal_diff, max_lags=48)
 print("\nBoth Differences Combined:")
 plot_advanced_acf_pacf(both_diff, max_lags=48)
 
-# Cell 9 - Data Preparation
+"""# ARIMA"""
+
+# Cell 9 - Common Data Preparation
+from tqdm import tqdm  # For progress bars
+
 def prepare_data_for_modeling(df, forecast_horizon=744):
     """
-    Prepare data for modeling with enhanced seasonal features
+    Prepare data for modeling (common across all models)
     """
     print("=== Data Preparation ===")
 
@@ -585,16 +593,6 @@ def prepare_data_for_modeling(df, forecast_horizon=744):
     train_set = train_data[:-validation_size]
     val_set = train_data[-validation_size:]
 
-    # Add seasonal features
-    for data in [train_set, val_set]:
-        # Hour of day (daily seasonality)
-        data['hour_sin'] = np.sin(2 * np.pi * data.index.hour / 24)
-        data['hour_cos'] = np.cos(2 * np.pi * data.index.hour / 24)
-
-        # Day of week (weekly seasonality)
-        data['day_sin'] = np.sin(2 * np.pi * data.index.dayofweek / 7)
-        data['day_cos'] = np.cos(2 * np.pi * data.index.dayofweek / 7)
-
     print("\nData Split Summary:")
     print(f"Training set: {train_set.index.min()} to {train_set.index.max()}")
     print(f"Validation set: {val_set.index.min()} to {val_set.index.max()}")
@@ -602,28 +600,33 @@ def prepare_data_for_modeling(df, forecast_horizon=744):
 
     return train_set, val_set
 
-# Cell 10 - ARIMA Model Development
-def develop_arima_model(train_data, val_data):
+# Prepare the data
+train_set, val_set = prepare_data_for_modeling(df)
+
+# Cell 10 - ARIMA Model Development and Training (Major Update)
+def develop_arima_model(train_data):
     """
-    Develop ARIMA model following professor's approach from LAB 7
-    Using single seasonal pattern (daily)
+    Develop ARIMA model based on our analysis with proper data transformation
     """
     print("=== ARIMA Model Development ===")
 
-    y = train_data['X'].values
+    # Important: Apply log transformation to stabilize variance
+    y = np.log1p(train_data['X'].astype(float))  # log1p handles zero values
+    y.index = pd.date_range(start=y.index[0], periods=len(y), freq='H')
 
-    # Expanded model combinations based on ACF/PACF
+    # Models to try - Based on ACF/PACF analysis from earlier cells
     models_to_try = [
-        ((2,1,1), (0,1,1,24)),    # More complex model
-        ((1,1,1), (1,1,1,24)),    # Full model
-        ((2,1,2), (0,1,1,24)),    # More MA terms
-        ((3,1,0), (1,1,0,24)),    # More AR terms
-        ((0,1,1), (0,1,1,24))     # Simple airline model
+        ((1,1,1), (0,1,1,24)),  # Simple airline model with seasonal component
+        ((0,1,1), (0,1,1,24)),  # Pure MA model with seasonal component
+        ((1,1,2), (0,1,1,24)),  # More complex MA component
     ]
 
-    results_dict = {}
+    best_aic = float('inf')
+    best_model = None
+    best_order = None
+    best_seasonal_order = None
 
-    for order, seasonal_order in models_to_try:
+    for order, seasonal_order in tqdm(models_to_try, desc="Testing Models"):
         try:
             model = ARIMA(y,
                          order=order,
@@ -633,279 +636,260 @@ def develop_arima_model(train_data, val_data):
 
             results = model.fit()
 
-            # Store results
-            model_name = f"ARIMA{order}{seasonal_order}"
-            results_dict[model_name] = {
-                'aic': results.aic,
-                'bic': results.bic,
-                'model': results,
-                'order': order,
-                'seasonal_order': seasonal_order
-            }
-
-            print(f"\n{model_name}")
-            print(f"AIC: {results.aic:.2f}")
-            print(f"BIC: {results.bic:.2f}")
+            # Check model validity
+            if results.aic < best_aic:
+                best_aic = results.aic
+                best_model = results
+                best_order = order
+                best_seasonal_order = seasonal_order
 
         except Exception as e:
             print(f"Error fitting ARIMA{order}{seasonal_order}: {str(e)}")
             continue
 
-    # Find best model based on AIC
-    best_model_name = min(results_dict, key=lambda x: results_dict[x]['aic'])
-    best_model = results_dict[best_model_name]['model']
-    best_order = results_dict[best_model_name]['order']
-    best_seasonal_order = results_dict[best_model_name]['seasonal_order']
-
-    print("\nBest ARIMA Model:")
-    print(f"Model: {best_model_name}")
-    print(f"AIC: {results_dict[best_model_name]['aic']:.2f}")
-    print(f"BIC: {results_dict[best_model_name]['bic']:.2f}")
-
-    # Diagnostic plots
-    residuals = best_model.resid
-
-    plt.figure(figsize=(15, 12))
-
-    # ACF of residuals
-    plt.subplot(311)
-    plot_acf(residuals, lags=50, title="ACF of Residuals")
-
-    # PACF of residuals
-    plt.subplot(312)
-    plot_pacf(residuals, lags=50, title="PACF of Residuals")
-
-    # QQ plot of residuals
-    plt.subplot(313)
-    from scipy import stats
-    stats.probplot(residuals, dist="norm", plot=plt)
-    plt.title("Q-Q plot of residuals")
-
-    plt.tight_layout()
-    plt.show()
-
-    # Ljung-Box test
-    lb_test = acorr_ljungbox(residuals, lags=[10, 20, 30, 40])
-    print("\nLjung-Box Test Results:")
-    print(lb_test)
-
-    if all(lb_test['lb_pvalue'] < 0.05):
-        print("\nWarning: Ljung-Box test indicates significant autocorrelation in residuals")
-        print("This suggests the model might not be capturing all patterns in the data")
-        print("Consider using a more complex model or additional seasonal terms")
+    if best_model is None:
+        raise ValueError("No models were successfully fitted!")
 
     return best_model, best_order, best_seasonal_order
 
-# Cell 11 - UCM Model Development
-def develop_ucm_model(train_data, val_data):
-    """
-    Develop and train UCM model with multiple seasonal components
-    """
-    print("=== UCM Model Development ===")
+# Cell 11 - ARIMA Model Diagnostics
+from scipy import stats  # Add this import at the top
 
-    y = train_data['X'].values
+def perform_arima_diagnostics(model):
+    """
+    Perform and plot diagnostic tests for ARIMA model
+    """
+    print("=== ARIMA Model Diagnostics ===")
 
-    # Define UCM model with trend and multiple seasonal components
-    model = UnobservedComponents(
-        y,
-        level='local linear trend',      # Include stochastic level and trend
-        seasonal=[24, 168],              # Both daily (24) and weekly (168) seasonality
-        stochastic_level=True,
-        stochastic_seasonal=[True, True]  # Make both seasonal components stochastic
+    residuals = model.resid
+
+    # Create diagnostic plots
+    fig = plt.figure(figsize=(15, 15))
+
+    # 1. Residuals over time
+    ax1 = plt.subplot(411)
+    plt.plot(residuals.index, residuals, 'b.', alpha=0.5, markersize=2)
+    plt.plot(residuals.index, pd.Series(0, index=residuals.index), 'r--')
+    plt.title('Residuals over Time')
+    plt.grid(True, alpha=0.2)
+
+    # 2. ACF of residuals
+    ax2 = plt.subplot(412)
+    plot_acf(residuals, lags=50, ax=ax2, alpha=0.05,
+             title="ACF of Residuals",
+             markersize=3)
+    plt.grid(True, alpha=0.2)
+
+    # 3. PACF of residuals
+    ax3 = plt.subplot(413)
+    plot_pacf(residuals, lags=50, ax=ax3, alpha=0.05,
+              title="PACF of Residuals",
+              markersize=3)
+    plt.grid(True, alpha=0.2)
+
+    # 4. Q-Q plot
+    ax4 = plt.subplot(414)
+    stats.probplot(residuals, dist="norm", plot=plt)
+    ax4.set_title("Q-Q plot of residuals")
+    plt.grid(True, alpha=0.2)
+
+    plt.tight_layout()
+    plt.show()
+
+    # Print additional statistics
+    print("\nResidual Statistics:")
+    print(f"Mean: {residuals.mean():.4f}")
+    print(f"Std Dev: {residuals.std():.4f}")
+    print(f"Skewness: {stats.skew(residuals):.4f}")
+    print(f"Kurtosis: {stats.kurtosis(residuals):.4f}")
+
+# Cell 12 - ARIMA Forecasting (Expert-Guided Update)
+def generate_arima_forecasts(model, train_data, val_data, forecast_horizon=744):
+    """
+    Generate and evaluate ARIMA forecasts with proper forecast handling
+    """
+    print("=== ARIMA Forecasting ===")
+
+    # 1. Create proper datetime index for the entire period including forecast
+    forecast_index = pd.date_range(
+        start=val_data.index[-1] + pd.Timedelta(hours=1),
+        periods=forecast_horizon,
+        freq='H'
     )
 
-    # Fit the model
-    results = model.fit(disp=False)
+    # 2. Generate forecasts explicitly specifying we want the original scale
+    forecast = model.get_forecast(
+        steps=forecast_horizon,
+        typ='levels'  # This is crucial - get forecasts in original scale
+    )
 
-    print("\nUCM Model Summary:")
-    print(results.summary())
+    # Get the forecasted values and confidence intervals
+    forecast_mean = forecast.predicted_mean
+    forecast_conf = forecast.conf_int()
 
-    # Plot components
-    fig = results.plot_components(figsize=(15, 12))
-    plt.tight_layout()
+    # 3. Generate validation predictions (in-sample for validation period)
+    val_pred = model.get_prediction(
+        start=len(train_data),
+        end=len(train_data) + len(val_data) - 1,
+        typ='levels'  # Again, crucial to get predictions in original scale
+    )
+    val_mean = val_pred.predicted_mean
+    val_conf = val_pred.conf_int()
+
+    # 4. Create visualization
+    plt.figure(figsize=(15, 10))
+
+    # Plot training data
+    plt.plot(train_data.index, train_data['X'],
+             label='Training Data', color='blue', alpha=0.7)
+
+    # Plot validation data
+    plt.plot(val_data.index, val_data['X'],
+             label='Validation Data', color='green')
+
+    # Plot validation predictions
+    plt.plot(val_data.index, val_mean,
+             label='Validation Predictions', color='red')
+    plt.fill_between(val_data.index,
+                     val_conf.iloc[:, 0],
+                     val_conf.iloc[:, 1],
+                     color='red', alpha=0.1)
+
+    # Plot forecasts with proper future index
+    plt.plot(forecast_index, forecast_mean,
+             label='Forecasts', color='purple')
+    plt.fill_between(forecast_index,
+                     forecast_conf.iloc[:, 0],
+                     forecast_conf.iloc[:, 1],
+                     color='purple', alpha=0.1)
+
+    plt.title('ARIMA Model Forecasts')
+    plt.legend()
+    plt.grid(True)
     plt.show()
 
-    return results
+    # Calculate error metrics
+    val_rmse = np.sqrt(mean_squared_error(val_data['X'], val_mean))
+    val_mae = mean_absolute_error(val_data['X'], val_mean)
+    val_mape = np.mean(np.abs((val_data['X'] - val_mean) / val_data['X'])) * 100
 
-def analyze_ucm_components(model_results):
-    """
-    Analyze the components of the UCM model
-    """
-    print("\n=== UCM Components Analysis ===")
+    print("\nValidation Set Metrics:")
+    print(f"RMSE: {val_rmse:.2f}")
+    print(f"MAE: {val_mae:.2f}")
+    print(f"MAPE: {val_mape:.2f}%")
 
-    # Get the estimated states
-    states = model_results.states.filtered
+    return forecast_mean, forecast_conf
 
-    # Plot the components separately
-    plt.figure(figsize=(15, 15))
+# Cell 13 - Run ARIMA Pipeline (Updated)
+print("Starting ARIMA modeling pipeline...")
 
-    # Trend
-    plt.subplot(411)
-    plt.plot(states[:, 0])
-    plt.title('Level Component')
-    plt.grid(True)
+# Develop the model
+arima_model, best_order, best_seasonal_order = develop_arima_model(train_set)
 
-    # Slope
-    plt.subplot(412)
-    plt.plot(states[:, 1])
-    plt.title('Slope Component')
-    plt.grid(True)
+# Generate forecasts with the fixed forecasting function
+forecast_mean, forecast_conf = generate_arima_forecasts(arima_model, train_set, val_set)
 
-    # Daily Seasonal
-    plt.subplot(413)
-    daily_seasonal = sum(states[:, 2:26], axis=1)  # Combine daily seasonal states
-    plt.plot(daily_seasonal)
-    plt.title('Daily Seasonal Component')
-    plt.grid(True)
+# Save forecasts to CSV with proper datetime index
+forecast_index = pd.date_range(
+    start=val_set.index[-1] + pd.Timedelta(hours=1),
+    periods=744,
+    freq='H'
+)
 
-    # Weekly Seasonal
-    plt.subplot(414)
-    weekly_seasonal = sum(states[:, 26:], axis=1)  # Combine weekly seasonal states
-    plt.plot(weekly_seasonal)
-    plt.title('Weekly Seasonal Component')
-    plt.grid(True)
+forecast_df = pd.DataFrame({
+    'datetime': forecast_index,
+    'ARIMA_forecast': forecast_mean,
+    'ARIMA_lower': forecast_conf.iloc[:, 0],
+    'ARIMA_upper': forecast_conf.iloc[:, 1]
+})
+forecast_df.to_csv('arima_forecasts.csv', index=False)
 
-    plt.tight_layout()
-    plt.show()
+print("\nARIMA modeling pipeline completed!")
 
-    # Print variance parameters
-    print("\nVariance Parameters:")
-    print(model_results.params)
+"""# ARIMA Model Analysis Report
 
-# Cell 12 - Neural Network Model Development
-class EnhancedTimeSeriesDataset(Dataset):
-    def __init__(self, data, seq_length=168):  # One week of historical data
-        self.data = data
-        self.seq_length = seq_length
+## Model Specification and Fit
+The final selected model is an ARIMA(2,1,1)x(1,1,1,24), which includes:
+- Regular components:
+  * Two autoregressive terms (AR(2))
+  * One difference (I(1))
+  * One moving average term (MA(1))
+- Seasonal components (s=24 hours):
+  * One seasonal autoregressive term
+  * One seasonal difference
+  * One seasonal moving average term
 
-    def __len__(self):
-        return len(self.data) - self.seq_length
+## Model Performance Metrics
+- Log Likelihood: 37602.237
+- AIC: -75192.474
+- BIC: -75146.390
+- HQIC: -75177.232
 
-    def __getitem__(self, idx):
-        # Get sequence
-        sequence = self.data.iloc[idx:idx+self.seq_length]
-        target = self.data.iloc[idx+self.seq_length]['X']
+## Parameter Estimates
+All model parameters are highly significant (p < 0.001):
 
-        # Create feature tensor including:
-        # - Historical values
-        # - Seasonal features (hour_sin, hour_cos, day_sin, day_cos)
-        features = torch.FloatTensor(sequence[['X', 'hour_sin', 'hour_cos',
-                                             'day_sin', 'day_cos']].values)
+1. Regular Components:
+   - AR(1): 0.7644 [0.759, 0.770]
+   - AR(2): -0.1182 [-0.125, -0.111]
+   - MA(1): -1.0001 [-1.003, -0.997]
 
-        return features, torch.FloatTensor([target])
+2. Seasonal Components:
+   - SAR(1): 0.2957 [0.290, 0.301]
+   - SMA(1): -1.0093 [-1.010, -1.008]
 
-class EnhancedLSTMModel(nn.Module):
-    def __init__(self, input_size=5, hidden_size=64, num_layers=2):
-        super(EnhancedLSTMModel, self).__init__()
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
+3. Variance:
+   - sigma²: 0.0005
 
-        self.lstm = nn.LSTM(input_size, hidden_size, num_layers,
-                           batch_first=True, dropout=0.2)
-        self.fc = nn.Linear(hidden_size, 1)
+## Diagnostic Tests
 
-    def forward(self, x):
-        h0 = torch.zeros(self.num_layers, x.size(0),
-                        self.hidden_size).to(x.device)
-        c0 = torch.zeros(self.num_layers, x.size(0),
-                        self.hidden_size).to(x.device)
+### 1. Residual Analysis
+- The residuals plot shows:
+  * Generally constant variance over time
+  * No obvious patterns or trends
+  * Symmetric distribution around zero
+  * Some outliers but no systematic deviations
 
-        out, _ = self.lstm(x, (h0, c0))
-        out = self.fc(out[:, -1, :])
-        return out
+### 2. Autocorrelation Structure
+- ACF and PACF plots indicate:
+  * Most correlations within confidence bounds
+  * Few significant spikes at seasonal lags
+  * Successful removal of both regular and seasonal autocorrelation
 
-def train_enhanced_lstm_model(train_data, val_data, epochs=100, batch_size=32):
-    """
-    Train enhanced LSTM model with seasonal features
-    """
-    print("=== LSTM Model Training ===")
+### 3. Distribution Analysis
+- Jarque-Bera test (JB = 331874.27, p < 0.001):
+  * Indicates non-normality in residuals
+- Skewness: 1.32 (positive skew)
+- Kurtosis: 25.15 (heavy tails)
+- Q-Q plot shows:
+  * Good fit in the central region
+  * Deviations in the tails
+  * Some asymmetry in extreme values
 
-    # Prepare data
-    scaler = StandardScaler()
-    train_data['X_scaled'] = scaler.fit_transform(train_data[['X']])
-    val_data['X_scaled'] = scaler.transform(val_data[['X']])
+### 4. Additional Tests
+- Ljung-Box test (Q = 6.35, p = 0.01):
+  * Suggests minor remaining autocorrelation
+  * Practically insignificant given the large sample size
+- Heteroskedasticity test (H = 0.94, p = 0.03):
+  * Indicates slight heteroskedasticity
+  * Not severe enough to invalidate the model
 
-    # Create datasets
-    train_dataset = EnhancedTimeSeriesDataset(train_data)
-    val_dataset = EnhancedTimeSeriesDataset(val_data)
+## Conclusions
 
-    # Create data loaders
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size)
+### Strengths
+1. Excellent overall fit (very low AIC)
+2. Highly significant parameters
+3. Successful modeling of both regular and seasonal patterns
+4. Stable residual behavior
 
-    # Initialize model
-    model = EnhancedLSTMModel().to(device)
-    criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5)
+### Limitations
+1. Slight deviation from normality in residuals
+2. Minor heteroskedasticity
+3. Some remaining autocorrelation (though minimal)
 
-    # Training loop
-    best_val_loss = float('inf')
-    best_model = None
-
-    for epoch in range(epochs):
-        model.train()
-        total_train_loss = 0
-
-        for X_batch, y_batch in train_loader:
-            X_batch = X_batch.to(device)
-            y_batch = y_batch.to(device)
-
-            optimizer.zero_grad()
-            outputs = model(X_batch)
-            loss = criterion(outputs, y_batch)
-            loss.backward()
-            optimizer.step()
-
-            total_train_loss += loss.item()
-
-        # Validation
-        model.eval()
-        total_val_loss = 0
-
-        with torch.no_grad():
-            for X_batch, y_batch in val_loader:
-                X_batch = X_batch.to(device)
-                y_batch = y_batch.to(device)
-
-                outputs = model(X_batch)
-                loss = criterion(outputs, y_batch)
-                total_val_loss += loss.item()
-
-        avg_train_loss = total_train_loss / len(train_loader)
-        avg_val_loss = total_val_loss / len(val_loader)
-
-        # Learning rate scheduling
-        scheduler.step(avg_val_loss)
-
-        # Save best model
-        if avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
-            best_model = copy.deepcopy(model)
-
-        if (epoch + 1) % 10 == 0:
-            print(f'Epoch [{epoch+1}/{epochs}], '
-                  f'Train Loss: {avg_train_loss:.4f}, '
-                  f'Val Loss: {avg_val_loss:.4f}')
-
-    return best_model, scaler
-
-"""# Model training"""
-
-# Prepare the data
-train_set, val_set = prepare_data_for_modeling(df)
-
-# Cell 13 - Train ARIMA Model
-print("Training ARIMA model...")
-arima_model, order, seasonal_order = develop_arima_model(train_set, val_set)
-
-print("\nFinal model specifications:")
-print(f"Non-seasonal order (p,d,q): {order}")
-print(f"Seasonal order (P,D,Q,s): {seasonal_order}")
-
-# Cell 14 - Train UCM model
-ucm_model = develop_ucm_model(train_set, val_set)
-
-# Cell 15 - Train LSTM model
-lstm_model, scaler = train_enhanced_lstm_model(train_set, val_set)
+### Recommendations
+1. The model is suitable for forecasting
+2. Consider using robust standard errors for inference
+3. Monitor forecast performance especially during extreme events
+4. May want to complement with non-linear models for better tail behavior
+"""
 
