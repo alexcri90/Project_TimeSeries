@@ -2,4 +2,4 @@
 .venv/
 solution/*
 !solution/*.csv
-
+prompts.txt

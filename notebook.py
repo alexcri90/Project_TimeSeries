@@ -21,6 +21,7 @@ Original file is located at
 
 # Cell 1 - Environment Setup and Imports
 import warnings
+import os
 warnings.filterwarnings('ignore')
 
 # Essential libraries
@@ -31,6 +32,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import sys
 import platform
+from scipy import stats
 
 # Time series specific
 from statsmodels.tsa.stattools import adfuller
@@ -496,7 +498,7 @@ print_series_stats(diff1, "First Difference")
 print_series_stats(seasonal_diff, "Seasonal Difference")
 print_series_stats(both_diff, "Both Differences")
 
-# Cell 8 - Updated ACF and PACF Analysis
+# Cell 9 - Updated ACF and PACF Analysis
 
 def plot_advanced_acf_pacf(series, max_lags=None, periods=None):
     """
@@ -574,9 +576,9 @@ plot_advanced_acf_pacf(seasonal_diff, max_lags=48)
 print("\nBoth Differences Combined:")
 plot_advanced_acf_pacf(both_diff, max_lags=48)
 
-"""# ARIMA"""
+"""# ARIMA Simple"""
 
-# Cell 9 - Common Data Preparation
+# Cell 10 - Common Data Preparation
 from tqdm import tqdm  # For progress bars
 
 def prepare_data_for_modeling(df, forecast_horizon=744):
@@ -603,22 +605,23 @@ def prepare_data_for_modeling(df, forecast_horizon=744):
 # Prepare the data
 train_set, val_set = prepare_data_for_modeling(df)
 
-# Cell 10 - ARIMA Model Development and Training (Major Update)
+# Cell 11 - ARIMA Model Development and Training
 def develop_arima_model(train_data):
     """
-    Develop ARIMA model based on our analysis with proper data transformation
+    Develop ARIMA model based on theoretical analysis
     """
     print("=== ARIMA Model Development ===")
 
-    # Important: Apply log transformation to stabilize variance
-    y = np.log1p(train_data['X'].astype(float))  # log1p handles zero values
+    # Convert to pandas Series with frequency and handle any preprocessing
+    y = train_data['X'].astype(float)
     y.index = pd.date_range(start=y.index[0], periods=len(y), freq='H')
 
-    # Models to try - Based on ACF/PACF analysis from earlier cells
+    # Define more conservative models
     models_to_try = [
-        ((1,1,1), (0,1,1,24)),  # Simple airline model with seasonal component
-        ((0,1,1), (0,1,1,24)),  # Pure MA model with seasonal component
-        ((1,1,2), (0,1,1,24)),  # More complex MA component
+        ((1,1,1), (0,1,1,24)),    # Simple model with seasonal MA only
+        ((1,1,1), (1,1,0,24)),    # Simple model with seasonal AR only
+        ((2,1,2), (1,1,1,24)),    # More complex model
+        ((0,1,1), (0,1,1,24))     # Airline model (often works well)
     ]
 
     best_aic = float('inf')
@@ -626,38 +629,56 @@ def develop_arima_model(train_data):
     best_order = None
     best_seasonal_order = None
 
+    print("\nTrying specific model configurations...")
     for order, seasonal_order in tqdm(models_to_try, desc="Testing Models"):
         try:
+            print(f"\nFitting ARIMA{order}{seasonal_order}")
+
+            # Add start_params to help convergence
             model = ARIMA(y,
                          order=order,
                          seasonal_order=seasonal_order,
                          enforce_stationarity=False,
-                         enforce_invertibility=False)
+                         enforce_invertibility=True)  # Changed to True
 
-            results = model.fit()
+            # Use conditional sum of squares to start
+            results = model.fit(method='innovations_mle')
+            current_aic = results.aic
 
-            # Check model validity
-            if results.aic < best_aic:
-                best_aic = results.aic
+            print(f"AIC: {current_aic:.2f}")
+
+            # Check if the model is reasonable (non-flat forecast)
+            test_forecast = results.forecast(steps=24)
+            forecast_std = test_forecast.std()
+
+            # Only consider model if forecasts show variation
+            if forecast_std > 0.001 and current_aic < best_aic:
+                best_aic = current_aic
                 best_model = results
                 best_order = order
                 best_seasonal_order = seasonal_order
 
         except Exception as e:
-            print(f"Error fitting ARIMA{order}{seasonal_order}: {str(e)}")
+            print(f"Error fitting ARIMA{order}{seasonal_order}:")
+            print(f"Error message: {str(e)}")
             continue
 
     if best_model is None:
         raise ValueError("No models were successfully fitted!")
 
+    print("\nBest Model Configuration:")
+    print(f"Order: {best_order}")
+    print(f"Seasonal Order: {best_seasonal_order}")
+    print(f"AIC: {best_aic}")
+    print("\nModel Summary:")
+    print(best_model.summary())
+
     return best_model, best_order, best_seasonal_order
 
-# Cell 11 - ARIMA Model Diagnostics
-from scipy import stats  # Add this import at the top
-
+# Cell 12 - ARIMA Model Diagnostics
 def perform_arima_diagnostics(model):
     """
-    Perform and plot diagnostic tests for ARIMA model
+    Perform diagnostic tests for ARIMA model
     """
     print("=== ARIMA Model Diagnostics ===")
 
@@ -696,200 +717,644 @@ def perform_arima_diagnostics(model):
     plt.tight_layout()
     plt.show()
 
-    # Print additional statistics
+    # Print statistics
     print("\nResidual Statistics:")
     print(f"Mean: {residuals.mean():.4f}")
     print(f"Std Dev: {residuals.std():.4f}")
     print(f"Skewness: {stats.skew(residuals):.4f}")
     print(f"Kurtosis: {stats.kurtosis(residuals):.4f}")
 
-# Cell 12 - ARIMA Forecasting (Expert-Guided Update)
+# Cell 13 - ARIMA Forecasting (with non-negative constraints)
 def generate_arima_forecasts(model, train_data, val_data, forecast_horizon=744):
     """
-    Generate and evaluate ARIMA forecasts with proper forecast handling
+    Generate and evaluate ARIMA forecasts with non-negative constraints
     """
     print("=== ARIMA Forecasting ===")
 
-    # 1. Create proper datetime index for the entire period including forecast
-    forecast_index = pd.date_range(
-        start=val_data.index[-1] + pd.Timedelta(hours=1),
-        periods=forecast_horizon,
-        freq='H'
-    )
+    # In-sample predictions
+    in_sample_pred = model.get_prediction(start=0)
+    in_sample_mean = np.maximum(in_sample_pred.predicted_mean, 0)  # Force non-negative
 
-    # 2. Generate forecasts explicitly specifying we want the original scale
-    forecast = model.get_forecast(
-        steps=forecast_horizon,
-        typ='levels'  # This is crucial - get forecasts in original scale
-    )
-
-    # Get the forecasted values and confidence intervals
-    forecast_mean = forecast.predicted_mean
-    forecast_conf = forecast.conf_int()
-
-    # 3. Generate validation predictions (in-sample for validation period)
+    # Validation set predictions
     val_pred = model.get_prediction(
         start=len(train_data),
-        end=len(train_data) + len(val_data) - 1,
-        typ='levels'  # Again, crucial to get predictions in original scale
+        end=len(train_data)+len(val_data)-1,
+        dynamic=False
     )
-    val_mean = val_pred.predicted_mean
+    val_mean = np.maximum(val_pred.predicted_mean, 0)  # Force non-negative
     val_conf = val_pred.conf_int()
+    val_conf.iloc[:, 0] = np.maximum(val_conf.iloc[:, 0], 0)  # Force non-negative lower bound
 
-    # 4. Create visualization
+    # Future forecasts
+    forecast = model.get_forecast(
+        steps=forecast_horizon,
+        alpha=0.05
+    )
+    forecast_mean = np.maximum(forecast.predicted_mean, 0)  # Force non-negative
+    forecast_conf = forecast.conf_int()
+    forecast_conf.iloc[:, 0] = np.maximum(forecast_conf.iloc[:, 0], 0)  # Force non-negative lower bound
+
+    # Plot results
     plt.figure(figsize=(15, 10))
 
     # Plot training data
-    plt.plot(train_data.index, train_data['X'],
-             label='Training Data', color='blue', alpha=0.7)
+    plt.plot(train_data.index, train_data['X'], label='Training Data', alpha=0.7)
 
     # Plot validation data
-    plt.plot(val_data.index, val_data['X'],
-             label='Validation Data', color='green')
+    plt.plot(val_data.index, val_data['X'], label='Validation Data', color='green', alpha=0.7)
 
     # Plot validation predictions
-    plt.plot(val_data.index, val_mean,
-             label='Validation Predictions', color='red')
+    plt.plot(val_data.index, val_mean, label='Validation Predictions', color='red', linestyle='--')
     plt.fill_between(val_data.index,
                      val_conf.iloc[:, 0],
                      val_conf.iloc[:, 1],
                      color='red', alpha=0.1)
 
-    # Plot forecasts with proper future index
-    plt.plot(forecast_index, forecast_mean,
-             label='Forecasts', color='purple')
+    # Plot forecasts
+    forecast_index = pd.date_range(start=val_data.index[-1] + pd.Timedelta(hours=1),
+                                 periods=forecast_horizon,
+                                 freq='H')
+    plt.plot(forecast_index, forecast_mean, label='ARIMA Forecasts', color='blue')
     plt.fill_between(forecast_index,
                      forecast_conf.iloc[:, 0],
                      forecast_conf.iloc[:, 1],
-                     color='purple', alpha=0.1)
+                     color='blue', alpha=0.1)
 
     plt.title('ARIMA Model Forecasts')
     plt.legend()
     plt.grid(True)
+    plt.tight_layout()
     plt.show()
 
-    # Calculate error metrics
+    # Calculate error metrics (using non-negative predictions)
     val_rmse = np.sqrt(mean_squared_error(val_data['X'], val_mean))
     val_mae = mean_absolute_error(val_data['X'], val_mean)
     val_mape = np.mean(np.abs((val_data['X'] - val_mean) / val_data['X'])) * 100
 
     print("\nValidation Set Metrics:")
-    print(f"RMSE: {val_rmse:.2f}")
-    print(f"MAE: {val_mae:.2f}")
-    print(f"MAPE: {val_mape:.2f}%")
+    print(f"RMSE: {val_rmse:.4f}")
+    print(f"MAE: {val_mae:.4f}")
+    print(f"MAPE: {val_mape:.4f}%")
 
-    return forecast_mean, forecast_conf
+    return forecast_mean, forecast_conf, val_mean, val_conf
 
-# Cell 13 - Run ARIMA Pipeline (Updated)
+# Cell 14 - Run ARIMA Pipeline
 print("Starting ARIMA modeling pipeline...")
 
-# Develop the model
-arima_model, best_order, best_seasonal_order = develop_arima_model(train_set)
+try:
+    # First develop and train the model
+    arima_model, best_order, best_seasonal_order = develop_arima_model(train_set)
 
-# Generate forecasts with the fixed forecasting function
-forecast_mean, forecast_conf = generate_arima_forecasts(arima_model, train_set, val_set)
+    # Perform diagnostics
+    perform_arima_diagnostics(arima_model)
 
-# Save forecasts to CSV with proper datetime index
-forecast_index = pd.date_range(
-    start=val_set.index[-1] + pd.Timedelta(hours=1),
-    periods=744,
-    freq='H'
-)
+    # Generate forecasts
+    forecast_mean, forecast_conf, val_mean, val_conf = generate_arima_forecasts(arima_model, train_set, val_set)
 
-forecast_df = pd.DataFrame({
-    'datetime': forecast_index,
-    'ARIMA_forecast': forecast_mean,
-    'ARIMA_lower': forecast_conf.iloc[:, 0],
-    'ARIMA_upper': forecast_conf.iloc[:, 1]
-})
-forecast_df.to_csv('arima_forecasts.csv', index=False)
+    # Save forecasts to CSV
+    forecast_df = pd.DataFrame({
+        'datetime': pd.date_range(start=val_set.index[-1] + pd.Timedelta(hours=1),
+                                periods=744,
+                                freq='H'),
+        'ARIMA_forecast': forecast_mean,
+        'ARIMA_lower': forecast_conf.iloc[:, 0],
+        'ARIMA_upper': forecast_conf.iloc[:, 1]
+    })
+    forecast_df.set_index('datetime', inplace=True)
+    forecast_df.to_csv('arima_forecasts.csv')
 
-print("\nARIMA modeling pipeline completed!")
+    print("\nARIMA modeling pipeline completed!")
+    print("\nForecasts have been saved to 'arima_forecasts.csv'")
 
-"""# ARIMA Model Analysis Report
+except Exception as e:
+    print(f"Error in ARIMA pipeline: {str(e)}")
+    raise
 
-## Model Specification and Fit
-The final selected model is an ARIMA(2,1,1)x(1,1,1,24), which includes:
-- Regular components:
-  * Two autoregressive terms (AR(2))
-  * One difference (I(1))
-  * One moving average term (MA(1))
-- Seasonal components (s=24 hours):
-  * One seasonal autoregressive term
-  * One seasonal difference
-  * One seasonal moving average term
+# Cell 15 - Create plot combining original data and forecasts
 
-## Model Performance Metrics
-- Log Likelihood: 37602.237
-- AIC: -75192.474
-- BIC: -75146.390
-- HQIC: -75177.232
+import os
 
-## Parameter Estimates
-All model parameters are highly significant (p < 0.001):
+def plot_with_forecasts(df, forecast_csv):
+    """
+    Plot original time series with forecasts appended
+    """
+    # Read the forecasts
+    forecasts = pd.read_csv(forecast_csv)
+    forecasts['datetime'] = pd.to_datetime(forecasts['datetime'])
 
-1. Regular Components:
-   - AR(1): 0.7644 [0.759, 0.770]
-   - AR(2): -0.1182 [-0.125, -0.111]
-   - MA(1): -1.0001 [-1.003, -0.997]
+    # Create plot
+    plt.figure(figsize=(15, 10))
 
-2. Seasonal Components:
-   - SAR(1): 0.2957 [0.290, 0.301]
-   - SMA(1): -1.0093 [-1.010, -1.008]
+    # Plot original data until November 2016
+    plt.plot(df.index, df['X'], label='Historical Data', color='blue')
 
-3. Variance:
-   - sigma²: 0.0005
+    # Add forecasts as continuation
+    plt.plot(forecasts['datetime'], forecasts['ARIMA_forecast'],
+             label='ARIMA Forecasts', color='red')
 
-## Diagnostic Tests
+    # Add confidence intervals
+    plt.fill_between(forecasts['datetime'],
+                     forecasts['ARIMA_lower'],
+                     forecasts['ARIMA_upper'],
+                     color='red', alpha=0.1)
 
-### 1. Residual Analysis
-- The residuals plot shows:
-  * Generally constant variance over time
-  * No obvious patterns or trends
-  * Symmetric distribution around zero
-  * Some outliers but no systematic deviations
+    plt.title('Time Series with December 2016 Forecasts')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
 
-### 2. Autocorrelation Structure
-- ACF and PACF plots indicate:
-  * Most correlations within confidence bounds
-  * Few significant spikes at seasonal lags
-  * Successful removal of both regular and seasonal autocorrelation
+# First check if we have the forecasts CSV
+if os.path.exists('arima_forecasts.csv'):
+    print("Found existing forecasts, creating plot...")
+    plot_with_forecasts(df, 'arima_forecasts.csv')
+else:
+    print("No forecast file found. Please run the ARIMA model first.")
 
-### 3. Distribution Analysis
-- Jarque-Bera test (JB = 331874.27, p < 0.001):
-  * Indicates non-normality in residuals
-- Skewness: 1.32 (positive skew)
-- Kurtosis: 25.15 (heavy tails)
-- Q-Q plot shows:
-  * Good fit in the central region
-  * Deviations in the tails
-  * Some asymmetry in extreme values
+# Cell 16 - Plot just the forecasted values
+def plot_forecasts_only(forecast_csv):
+    """
+    Plot only the forecasted values for December 2016
+    """
+    # Read the forecasts
+    forecasts = pd.read_csv(forecast_csv)
+    forecasts['datetime'] = pd.to_datetime(forecasts['datetime'])
 
-### 4. Additional Tests
-- Ljung-Box test (Q = 6.35, p = 0.01):
-  * Suggests minor remaining autocorrelation
-  * Practically insignificant given the large sample size
-- Heteroskedasticity test (H = 0.94, p = 0.03):
-  * Indicates slight heteroskedasticity
-  * Not severe enough to invalidate the model
+    # Create plot
+    plt.figure(figsize=(15, 8))
 
-## Conclusions
+    # Plot forecasts
+    plt.plot(forecasts['datetime'], forecasts['ARIMA_forecast'],
+             label='ARIMA Forecasts', color='red', linewidth=2)
 
-### Strengths
-1. Excellent overall fit (very low AIC)
-2. Highly significant parameters
-3. Successful modeling of both regular and seasonal patterns
-4. Stable residual behavior
+    # Add confidence intervals
+    plt.fill_between(forecasts['datetime'],
+                    forecasts['ARIMA_lower'],
+                    forecasts['ARIMA_upper'],
+                    color='red', alpha=0.2,
+                    label='95% Confidence Interval')
 
-### Limitations
-1. Slight deviation from normality in residuals
-2. Minor heteroskedasticity
-3. Some remaining autocorrelation (though minimal)
+    plt.title('ARIMA Forecasts for December 2016')
+    plt.ylabel('Value')
+    plt.xlabel('Date')
+    plt.legend()
+    plt.grid(True)
 
-### Recommendations
-1. The model is suitable for forecasting
-2. Consider using robust standard errors for inference
-3. Monitor forecast performance especially during extreme events
-4. May want to complement with non-linear models for better tail behavior
-"""
+    # Print some statistics about the forecasts
+    print("\nForecast Statistics:")
+    print(f"Mean: {forecasts['ARIMA_forecast'].mean():.4f}")
+    print(f"Std Dev: {forecasts['ARIMA_forecast'].std():.4f}")
+    print(f"Min: {forecasts['ARIMA_forecast'].min():.4f}")
+    print(f"Max: {forecasts['ARIMA_forecast'].max():.4f}")
 
+    plt.show()
+
+if os.path.exists('arima_forecasts.csv'):
+    print("Plotting forecasts...")
+    plot_forecasts_only('arima_forecasts.csv')
+else:
+    print("No forecast file found. Please run the ARIMA model first.")
+
+# Cell 17 - Plot November actuals and December forecasts
+def plot_nov_dec_comparison(df, forecast_csv):
+    """
+    Plot November 2016 actual values and December 2016 forecasts
+    """
+    # Read the forecasts
+    forecasts = pd.read_csv(forecast_csv)
+    forecasts['datetime'] = pd.to_datetime(forecasts['datetime'])
+
+    # Get November data (last month before forecasts)
+    november_start = '2016-11-01'
+    november_end = '2016-11-30 23:00:00'
+    november_data = df.loc[november_start:november_end]
+
+    # Create plot
+    plt.figure(figsize=(15, 8))
+
+    # Plot November actual values
+    plt.plot(november_data.index, november_data['X'],
+             label='November Actual Values', color='blue', linewidth=2)
+
+    # Plot December forecasts
+    plt.plot(forecasts['datetime'], forecasts['ARIMA_forecast'],
+             label='December Forecasts', color='red', linewidth=2)
+
+    # Add confidence intervals for forecasts
+    plt.fill_between(forecasts['datetime'],
+                    forecasts['ARIMA_lower'],
+                    forecasts['ARIMA_upper'],
+                    color='red', alpha=0.2,
+                    label='95% Confidence Interval')
+
+    plt.title('November 2016 Actual Values vs December 2016 Forecasts')
+    plt.ylabel('Value')
+    plt.xlabel('Date')
+    plt.legend()
+    plt.grid(True)
+
+    # Print statistics for comparison
+    print("\nNovember Statistics:")
+    print(f"Mean: {november_data['X'].mean():.4f}")
+    print(f"Std Dev: {november_data['X'].std():.4f}")
+    print(f"Min: {november_data['X'].min():.4f}")
+    print(f"Max: {november_data['X'].max():.4f}")
+
+    print("\nDecember Forecast Statistics:")
+    print(f"Mean: {forecasts['ARIMA_forecast'].mean():.4f}")
+    print(f"Std Dev: {forecasts['ARIMA_forecast'].std():.4f}")
+    print(f"Min: {forecasts['ARIMA_forecast'].min():.4f}")
+    print(f"Max: {forecasts['ARIMA_forecast'].max():.4f}")
+
+    plt.show()
+
+if os.path.exists('arima_forecasts.csv'):
+    print("Plotting November comparison...")
+    plot_nov_dec_comparison(df, 'arima_forecasts.csv')
+else:
+    print("No forecast file found. Please run the ARIMA model first.")
+
+# Cell 18 - Plot November actuals, December forecasts, and December real values
+def plot_complete_comparison(df, forecast_csv, solution_path):
+    """
+    Plot November 2016 actual values, December 2016 forecasts, and December 2016 real values
+    Colors chosen for colorblind visibility:
+    - November actuals: Dark Blue
+    - December forecasts: Orange
+    - December real values: Green
+    - Confidence intervals: Light Orange shading
+    """
+    # Read the forecasts and solution with debug prints
+    forecasts = pd.read_csv(forecast_csv)
+    print("\nForecast columns:", forecasts.columns.tolist())
+    forecasts['datetime'] = pd.to_datetime(forecasts['datetime'])
+
+    # Read and inspect solution file
+    solution = pd.read_csv(solution_path)
+    print("\nSolution columns:", solution.columns.tolist())
+
+    # Create datetime index for solution based on December 2016
+    solution.index = pd.date_range(start='2016-12-01',
+                                 periods=len(solution),
+                                 freq='H')
+
+    # Get November data
+    november_start = '2016-11-01'
+    november_end = '2016-11-30 23:00:00'
+    november_data = df.loc[november_start:november_end]
+
+    # Create plot
+    plt.figure(figsize=(15, 8))
+
+    # Plot November actual values (Dark Blue)
+    plt.plot(november_data.index, november_data['X'],
+             label='November Actual Values',
+             color='#000080',  # Dark Blue
+             linewidth=2)
+
+    # Plot December forecasts (Orange)
+    plt.plot(forecasts['datetime'], forecasts['ARIMA_forecast'],
+             label='December Forecasts',
+             color='#FFA500',  # Orange
+             linewidth=2)
+
+    # Plot December real values (Green) - assuming 'X' is the column name in solution
+    plt.plot(solution.index, solution['X'],
+             label='December Real Values',
+             color='#008000',  # Green
+             linewidth=2,
+             linestyle='--')
+
+    # Add confidence intervals for forecasts (Light Orange shading)
+    plt.fill_between(forecasts['datetime'],
+                    forecasts['ARIMA_lower'],
+                    forecasts['ARIMA_upper'],
+                    color='#FFA500',  # Orange
+                    alpha=0.2,
+                    label='95% Confidence Interval')
+
+    plt.title('November 2016 Actual Values vs December 2016 Forecasts and Real Values')
+    plt.ylabel('Value')
+    plt.xlabel('Date')
+    plt.legend()
+    plt.grid(True)
+
+    # Print statistics for comparison
+    print("\nNovember Statistics:")
+    print(f"Mean: {november_data['X'].mean():.4f}")
+    print(f"Std Dev: {november_data['X'].std():.4f}")
+    print(f"Min: {november_data['X'].min():.4f}")
+    print(f"Max: {november_data['X'].max():.4f}")
+
+    print("\nDecember Forecast Statistics:")
+    print(f"Mean: {forecasts['ARIMA_forecast'].mean():.4f}")
+    print(f"Std Dev: {forecasts['ARIMA_forecast'].std():.4f}")
+    print(f"Min: {forecasts['ARIMA_forecast'].min():.4f}")
+    print(f"Max: {forecasts['ARIMA_forecast'].max():.4f}")
+
+    print("\nDecember Real Values Statistics:")
+    print(f"Mean: {solution['X'].mean():.4f}")
+    print(f"Std Dev: {solution['X'].std():.4f}")
+    print(f"Min: {solution['X'].min():.4f}")
+    print(f"Max: {solution['X'].max():.4f}")
+
+    # Calculate and print error metrics between forecasts and real values
+    print("\nForecast Error Metrics:")
+    mae = mean_absolute_error(solution['X'], forecasts['ARIMA_forecast'])
+    rmse = np.sqrt(mean_squared_error(solution['X'], forecasts['ARIMA_forecast']))
+    mape = np.mean(np.abs((solution['X'] - forecasts['ARIMA_forecast']) / solution['X'])) * 100
+    print(f"MAE: {mae:.4f}")
+    print(f"RMSE: {rmse:.4f}")
+    print(f"MAPE: {mape:.4f}%")
+
+    plt.show()
+
+# Execute the plot
+solution_path = os.path.join('solution', 't2_solution.csv')
+if os.path.exists('arima_forecasts.csv') and os.path.exists(solution_path):
+    print("Plotting complete comparison...")
+    plot_complete_comparison(df, 'arima_forecasts.csv', solution_path)
+else:
+    print("Missing required files. Please check both forecast and solution files exist.")
+
+"""## ARIMA Advanced - SARIMAX with Christmas"""
+
+# Cell 19 - More Efficient Seasonal Features
+def create_efficient_features(dates):
+    """
+    Create efficient features for both daily and weekly patterns
+    """
+    features = pd.DataFrame(index=dates)
+
+    # Hour of day (0-23) as cyclical features
+    hours = 24
+    features['hour_sin'] = np.sin(2 * np.pi * dates.hour / hours)
+    features['hour_cos'] = np.cos(2 * np.pi * dates.hour / hours)
+
+    # Day of week (0-6) as cyclical features
+    days = 7
+    features['day_sin'] = np.sin(2 * np.pi * dates.dayofweek / days)
+    features['day_cos'] = np.cos(2 * np.pi * dates.dayofweek / days)
+
+    # Christmas evening indicator
+    christmas_evenings = ((dates.day.isin([25, 26])) &
+                         (dates.hour.isin(range(20, 24))) |
+                         (dates.day.isin([26, 27])) &
+                         (dates.hour.isin(range(0, 6))))
+    features['christmas_evening'] = christmas_evenings.astype(int)
+
+    return features
+
+# Cell 20 - Efficient ARIMA Model
+def develop_efficient_seasonal_arima(train_data):
+    """
+    Develop ARIMA model with daily seasonality and external regressors for weekly patterns
+    """
+    print("=== Efficient Seasonal ARIMA Model Development ===")
+
+    # Prepare the target variable
+    y = train_data['X'].astype(float)
+    y.index = pd.date_range(start=y.index[0], periods=len(y), freq='H')
+
+    # Create efficient features
+    exog_train = create_efficient_features(y.index)
+    print(f"\nIncluded features: {exog_train.columns.tolist()}")
+
+    try:
+        # Fit model with daily seasonality and external regressors
+        model = ARIMA(y,
+                     order=(2, 1, 2),        # Regular ARIMA components
+                     seasonal_order=(1, 1, 1, 24),  # Daily seasonality
+                     exog=exog_train,        # Weekly patterns through cyclical features
+                     enforce_stationarity=False,
+                     enforce_invertibility=True)
+
+        results = model.fit()
+        print("\nModel Summary:")
+        print(results.summary())
+
+        return results
+
+    except Exception as e:
+        print(f"Error fitting model:")
+        print(f"Error message: {str(e)}")
+        raise
+
+# Cell 21 - Efficient Forecast Generation
+def generate_efficient_forecasts(model, train_data, forecast_horizon=744):
+    """
+    Generate forecasts efficiently
+    """
+    # Create forecast dates
+    forecast_start = train_data.index[-1] + pd.Timedelta(hours=1)
+    forecast_dates = pd.date_range(forecast_start, periods=forecast_horizon, freq='H')
+
+    # Create features for forecast period
+    exog_forecast = create_efficient_features(forecast_dates)
+
+    # Generate forecasts
+    forecasts = model.forecast(steps=forecast_horizon, exog=exog_forecast)
+    forecasts = np.maximum(forecasts, 0)  # Ensure non-negative
+
+    # Get confidence intervals
+    conf_int = model.get_forecast(steps=forecast_horizon, exog=exog_forecast).conf_int()
+    conf_int.iloc[:, 0] = np.maximum(conf_int.iloc[:, 0], 0)  # Ensure non-negative lower bound
+
+    return forecasts, conf_int, forecast_dates
+
+# Cell 22 - Run Efficient Pipeline
+print("Starting Efficient ARIMA modeling pipeline...")
+
+try:
+    # Train the model
+    arima_model = develop_efficient_seasonal_arima(train_set)
+
+    # Generate forecasts
+    forecast_mean, forecast_conf, forecast_dates = generate_efficient_forecasts(arima_model, train_set)
+
+    # Create and save forecast DataFrame
+    forecast_df = pd.DataFrame({
+        'datetime': forecast_dates,
+        'ARIMA_forecast': forecast_mean,
+        'ARIMA_lower': forecast_conf.iloc[:, 0],
+        'ARIMA_upper': forecast_conf.iloc[:, 1]
+    })
+    forecast_df.to_csv('arima_forecasts_efficient.csv', index=False)
+
+    print("\nEfficient ARIMA model completed!")
+    print("Forecasts saved to 'arima_forecasts_efficient.csv'")
+
+except Exception as e:
+    print(f"Error in pipeline: {str(e)}")
+    raise
+
+# Cell 23 - Plot Efficient Model Results
+def plot_complete_comparison_efficient(df, forecast_csv, solution_path):
+    """
+    Plot November actuals, December efficient forecasts, and December real values
+    Colors chosen for colorblind visibility:
+    - November actuals: Dark Blue
+    - December forecasts: Orange
+    - December real values: Green
+    - Confidence intervals: Light Orange shading
+    """
+    # Read data files
+    forecasts = pd.read_csv(forecast_csv)
+    forecasts['datetime'] = pd.to_datetime(forecasts['datetime'])
+
+    solution = pd.read_csv(solution_path)
+    solution.index = pd.date_range(start='2016-12-01',
+                                 periods=len(solution),
+                                 freq='H')
+
+    # Get November data
+    november_start = '2016-11-01'
+    november_end = '2016-11-30 23:00:00'
+    november_data = df.loc[november_start:november_end]
+
+    # Create plot with proper size and dpi for better readability
+    plt.figure(figsize=(15, 8), dpi=100)
+
+    # Plot November actual values (Dark Blue)
+    plt.plot(november_data.index, november_data['X'],
+             label='November Actual Values',
+             color='#000080',  # Dark Blue
+             linewidth=2)
+
+    # Plot December forecasts (Orange) - making sure it's in December
+    plt.plot(pd.date_range(start='2016-12-01', periods=len(forecasts), freq='H'),
+             forecasts['ARIMA_forecast'],
+             label='December Forecasts (Efficient ARIMA)',
+             color='#FFA500',  # Orange
+             linewidth=2)
+
+    # Plot December real values (Green)
+    plt.plot(solution.index, solution['X'],
+             label='December Real Values',
+             color='#008000',  # Green
+             linewidth=2,
+             linestyle='--')
+
+    # Add confidence intervals - making sure they're in December
+    plt.fill_between(pd.date_range(start='2016-12-01', periods=len(forecasts), freq='H'),
+                    forecasts['ARIMA_lower'],
+                    forecasts['ARIMA_upper'],
+                    color='#FFA500',  # Orange
+                    alpha=0.2,
+                    label='95% Confidence Interval')
+
+    plt.title('November vs December 2016: Actual, Forecasts, and Real Values')
+    plt.ylabel('Traffic Congestion')
+    plt.xlabel('Date')
+    plt.legend()
+    plt.grid(True)
+
+    # Adjust x-axis to show the entire period clearly
+    plt.xlim(november_data.index[0], solution.index[-1])
+
+    # Print comparison statistics
+    print("\nForecast Error Metrics:")
+    mae = mean_absolute_error(solution['X'], forecasts['ARIMA_forecast'])
+    rmse = np.sqrt(mean_squared_error(solution['X'], forecasts['ARIMA_forecast']))
+    print(f"MAE: {mae:.4f}")
+    print(f"RMSE: {rmse:.4f}")
+
+    plt.show()
+
+# Execute the plot
+solution_path = os.path.join('solution', 't2_solution.csv')
+if os.path.exists('arima_forecasts_efficient.csv') and os.path.exists(solution_path):
+    print("Plotting complete comparison...")
+    plot_complete_comparison_efficient(df, 'arima_forecasts_efficient.csv', solution_path)
+else:
+    print("Missing required files. Please check both forecast and solution files exist.")
+
+# Cell 24 - Create separate plots for forecasts and real values
+def plot_separate_comparisons(df, forecast_csv, solution_path):
+    """
+    Create two separate plots:
+    1. November actuals + December forecasts
+    2. November actuals + December real values
+
+    Colors chosen for colorblind visibility:
+    - November actuals: Dark Blue
+    - December forecasts: Orange
+    - December real values: Green
+    - Confidence intervals: Light Orange shading
+    """
+    # Read data files
+    forecasts = pd.read_csv(forecast_csv)
+    forecasts['datetime'] = pd.to_datetime(forecasts['datetime'])
+
+    solution = pd.read_csv(solution_path)
+    solution.index = pd.date_range(start='2016-12-01',
+                                 periods=len(solution),
+                                 freq='H')
+
+    # Get November data
+    november_start = '2016-11-01'
+    november_end = '2016-11-30 23:00:00'
+    november_data = df.loc[november_start:november_end]
+
+    # Create figure with two subplots
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 12), dpi=100)
+
+    # Plot 1: November + December Forecasts
+    ax1.plot(november_data.index, november_data['X'],
+            label='November Actual Values',
+            color='#000080',  # Dark Blue
+            linewidth=2)
+
+    december_dates = pd.date_range(start='2016-12-01', periods=len(forecasts), freq='H')
+    ax1.plot(december_dates, forecasts['ARIMA_forecast'],
+            label='December Forecasts',
+            color='#FFA500',  # Orange
+            linewidth=2)
+
+    ax1.fill_between(december_dates,
+                    forecasts['ARIMA_lower'],
+                    forecasts['ARIMA_upper'],
+                    color='#FFA500',  # Orange
+                    alpha=0.2,
+                    label='95% Confidence Interval')
+
+    ax1.set_title('November 2016 Actual Values + December 2016 Forecasts')
+    ax1.set_ylabel('Traffic Congestion')
+    ax1.grid(True)
+    ax1.legend()
+
+    # Plot 2: November + December Real Values
+    ax2.plot(november_data.index, november_data['X'],
+            label='November Actual Values',
+            color='#000080',  # Dark Blue
+            linewidth=2)
+
+    ax2.plot(solution.index, solution['X'],
+            label='December Real Values',
+            color='#008000',  # Green
+            linewidth=2)
+
+    ax2.set_title('November 2016 Actual Values + December 2016 Real Values')
+    ax2.set_ylabel('Traffic Congestion')
+    ax2.set_xlabel('Date')
+    ax2.grid(True)
+    ax2.legend()
+
+    # Adjust layout and display
+    plt.tight_layout()
+
+    # Print comparison statistics
+    print("\nForecast Error Metrics:")
+    mae = mean_absolute_error(solution['X'], forecasts['ARIMA_forecast'])
+    rmse = np.sqrt(mean_squared_error(solution['X'], forecasts['ARIMA_forecast']))
+    print(f"MAE: {mae:.4f}")
+    print(f"RMSE: {rmse:.4f}")
+
+    plt.show()
+
+# Execute the plot
+solution_path = os.path.join('solution', 't2_solution.csv')
+if os.path.exists('arima_forecasts_efficient.csv') and os.path.exists(solution_path):
+    print("Plotting separate comparisons...")
+    plot_separate_comparisons(df, 'arima_forecasts_efficient.csv', solution_path)
+else:
+    print("Missing required files. Please check both forecast and solution files exist.")
