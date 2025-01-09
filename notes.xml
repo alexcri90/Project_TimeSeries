@@ -2,3 +2,11 @@
     <dataset id=1>
         <data>7129, 7130, 16033, 16034</data>
         <note>Decided to take the mean of the duplicate timestamps.</note>
+    </dataset>
+    <dataset id=2>
+        <data>7129, 7130, 16033, 16034</data>
+        <note>Decided to take the mean of the previous and following timestamps, same day.</note>
+    </dataset>
+    <dataset id=3>
+        <data>December forecasts, ARIMA</data>
+        <note>Negative values set to zero. 24 and 25 December dampened.</note>
