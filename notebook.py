@@ -1513,5 +1513,608 @@ By standard information criteria, **Model 1** outperforms **Model 2**, even thou
 
 In practice, **Model 1** might be the simpler, better choice for forecasting hourly traffic, while **Model 2** has added interpretability regarding holiday and weekly patterns but does not necessarily improve forecast accuracy.
 
-# UCM
+# Model 3: SARIMAX(2,1,2)(1,1,1)_24 more efficient
 """
+
+# Cell 27 - New Feature Creation Function
+def create_refined_features(dates):
+    """
+    Create features: only day_cos and christmas_evening
+    """
+    features = pd.DataFrame(index=dates)
+
+    # Day of week (0-6) as cosine feature only
+    days = 7
+    features['day_sin'] = np.sin(2 * np.pi * dates.dayofweek / days)
+
+    # Christmas evening indicator
+    christmas_evenings = ((dates.day.isin([25, 26])) &
+                         (dates.hour.isin(range(20, 24))) |
+                         (dates.day.isin([26, 27])) &
+                         (dates.hour.isin(range(0, 6))))
+    features['christmas_evening'] = christmas_evenings.astype(int)
+
+    return features
+
+# Cell 28 - Refined SARIMAX Model Development
+def develop_refined_sarimax(train_data):
+    """
+    Develop SARIMAX model with day_cos and christmas_evening regressors
+    Maintains complete AR(2) structure
+    """
+    print("=== Refined SARIMAX Model Development ===")
+
+    # Prepare the target variable
+    y = train_data['X'].astype(float)
+    y.index = pd.date_range(start=y.index[0], periods=len(y), freq='H')
+
+    # Create features
+    exog_train = create_refined_features(y.index)
+    print(f"\nIncluded features: {exog_train.columns.tolist()}")
+
+    try:
+        # Fit model with daily seasonality and selected regressors
+        model = ARIMA(y,
+                     order=(2, 1, 2),          # Keep complete AR(2)
+                     seasonal_order=(1, 1, 1, 24),  # Daily seasonality
+                     exog=exog_train,
+                     enforce_stationarity=False,
+                     enforce_invertibility=True)
+
+        results = model.fit()
+        print("\nModel Summary:")
+        print(results.summary())
+
+        return results, exog_train
+
+    except Exception as e:
+        print(f"Error fitting model:")
+        print(f"Error message: {str(e)}")
+        raise
+
+# Cell 29 - Generate Forecasts for Refined Model
+def generate_refined_forecasts(model, train_data, forecast_horizon=744):
+    """
+    Generate forecasts using the refined model
+    """
+    # Create forecast dates
+    forecast_start = train_data.index[-1] + pd.Timedelta(hours=1)
+    forecast_dates = pd.date_range(forecast_start, periods=forecast_horizon, freq='H')
+
+    # Create features for forecast period
+    exog_forecast = create_refined_features(forecast_dates)
+
+    # Generate forecasts
+    forecasts = model.forecast(steps=forecast_horizon, exog=exog_forecast)
+    forecasts = np.maximum(forecasts, 0)  # Ensure non-negative
+
+    # Get confidence intervals
+    conf_int = model.get_forecast(steps=forecast_horizon, exog=exog_forecast).conf_int()
+    conf_int.iloc[:, 0] = np.maximum(conf_int.iloc[:, 0], 0)  # Ensure non-negative lower bound
+
+    return forecasts, conf_int, forecast_dates
+
+# Cell 30 - Run Refined SARIMAX Pipeline
+print("Starting Refined SARIMAX modeling pipeline...")
+
+try:
+    # Train the model
+    refined_model, refined_features = develop_refined_sarimax(train_set)
+
+    # Generate forecasts
+    forecast_mean, forecast_conf, forecast_dates = generate_refined_forecasts(refined_model, train_set)
+
+    # Create and save forecast DataFrame
+    forecast_df = pd.DataFrame({
+        'datetime': forecast_dates,
+        'ARIMA_forecast': forecast_mean,
+        'ARIMA_lower': forecast_conf.iloc[:, 0],
+        'ARIMA_upper': forecast_conf.iloc[:, 1]
+    })
+    forecast_df.to_csv('arima_forecasts_refined.csv', index=False)
+
+    print("\nRefined SARIMAX model completed!")
+    print("Forecasts saved to 'arima_forecasts_refined.csv'")
+
+except Exception as e:
+    print(f"Error in pipeline: {str(e)}")
+    raise
+
+# Cell 31 - Plot Results
+def plot_refined_model_results(df, forecast_csv, solution_path):
+    """
+    Plot results of the refined model
+    """
+    # Read data files
+    forecasts = pd.read_csv(forecast_csv)
+    forecasts['datetime'] = pd.to_datetime(forecasts['datetime'])
+
+    solution = pd.read_csv(solution_path)
+    solution.index = pd.date_range(start='2016-12-01',
+                                 periods=len(solution),
+                                 freq='H')
+
+    # Get November data
+    november_data = df.loc['2016-11-01':'2016-11-30 23:00:00']
+
+    # Create figure
+    plt.figure(figsize=(15, 10))
+
+    # Plot data
+    plt.plot(november_data.index, november_data['X'],
+             label='November Actual Values',
+             color='#000080',
+             linewidth=2)
+
+    plt.plot(solution.index, solution['X'],
+             label='December Real Values',
+             color='#008000',
+             linewidth=2,
+             linestyle='--')
+
+    plt.plot(pd.date_range(start='2016-12-01', periods=len(forecasts), freq='H'),
+             forecasts['ARIMA_forecast'],
+             label='December Forecasts (Refined SARIMAX)',
+             color='#FFA500',
+             linewidth=2)
+
+    # Add confidence intervals
+    plt.fill_between(pd.date_range(start='2016-12-01', periods=len(forecasts), freq='H'),
+                    forecasts['ARIMA_lower'],
+                    forecasts['ARIMA_upper'],
+                    color='#FFA500',
+                    alpha=0.2,
+                    label='95% Confidence Interval')
+
+    plt.title('Refined SARIMAX Model: Forecasts vs Actual Values')
+    plt.ylabel('Traffic Congestion')
+    plt.xlabel('Date')
+    plt.legend()
+    plt.grid(True)
+
+    # Print error metrics
+    print("\nForecast Error Metrics:")
+    mae = mean_absolute_error(solution['X'], forecasts['ARIMA_forecast'])
+    rmse = np.sqrt(mean_squared_error(solution['X'], forecasts['ARIMA_forecast']))
+    mape = np.mean(np.abs((solution['X'] - forecasts['ARIMA_forecast']) / solution['X'])) * 100
+    print(f"MAE: {mae:.4f}")
+    print(f"RMSE: {rmse:.4f}")
+    print(f"MAPE: {mape:.2f}%")
+
+    plt.show()
+
+# Execute the plot
+solution_path = os.path.join('solution', 't2_solution.csv')
+if os.path.exists('arima_forecasts_refined.csv') and os.path.exists(solution_path):
+    print("Plotting refined model results...")
+    plot_refined_model_results(df, 'arima_forecasts_refined.csv', solution_path)
+else:
+    print("Missing required files. Please check both forecast and solution files exist.")
+
+# Cell 32 - Feature Creation Without Christmas
+def create_weekly_features(dates):
+    """
+    Create features: only day_sin
+    """
+    features = pd.DataFrame(index=dates)
+
+    # Day of week (0-6) as sine feature only
+    days = 7
+    features['day_sin'] = np.sin(2 * np.pi * dates.dayofweek / days)
+
+    return features
+
+# Cell 33 - SARIMAX Model Without Christmas Effect
+def develop_weekly_sarimax(train_data):
+    """
+    Develop SARIMAX model with only day_sin regressor
+    """
+    print("=== Weekly-Only SARIMAX Model Development ===")
+
+    # Prepare the target variable
+    y = train_data['X'].astype(float)
+    y.index = pd.date_range(start=y.index[0], periods=len(y), freq='H')
+
+    # Create features
+    exog_train = create_weekly_features(y.index)
+    print(f"\nIncluded features: {exog_train.columns.tolist()}")
+
+    try:
+        # Fit model
+        model = ARIMA(y,
+                     order=(2, 1, 2),
+                     seasonal_order=(1, 1, 1, 24),
+                     exog=exog_train,
+                     enforce_stationarity=False,
+                     enforce_invertibility=True)
+
+        results = model.fit()
+        print("\nModel Summary:")
+        print(results.summary())
+
+        return results, exog_train
+
+    except Exception as e:
+        print(f"Error fitting model:")
+        print(f"Error message: {str(e)}")
+        raise
+
+# Cell 34 - Generate Forecasts for Weekly-Only Model
+def generate_weekly_forecasts(model, train_data, forecast_horizon=744):
+    """
+    Generate forecasts using the weekly-only model
+    """
+    # Create forecast dates
+    forecast_start = train_data.index[-1] + pd.Timedelta(hours=1)
+    forecast_dates = pd.date_range(forecast_start, periods=forecast_horizon, freq='H')
+
+    # Create features for forecast period
+    exog_forecast = create_weekly_features(forecast_dates)
+
+    # Generate forecasts
+    forecasts = model.forecast(steps=forecast_horizon, exog=exog_forecast)
+    forecasts = np.maximum(forecasts, 0)  # Ensure non-negative
+
+    # Get confidence intervals
+    conf_int = model.get_forecast(steps=forecast_horizon, exog=exog_forecast).conf_int()
+    conf_int.iloc[:, 0] = np.maximum(conf_int.iloc[:, 0], 0)  # Ensure non-negative lower bound
+
+    return forecasts, conf_int, forecast_dates
+
+# Cell 35 (Updated) - Run Weekly-Only Pipeline
+print("Starting Weekly-Only SARIMAX modeling pipeline...")
+
+try:
+    # Train the model
+    weekly_model, weekly_features = develop_weekly_sarimax(train_set)
+
+    # Generate forecasts using the weekly-only forecast function
+    forecast_mean, forecast_conf, forecast_dates = generate_weekly_forecasts(
+        weekly_model,
+        train_set,
+        forecast_horizon=744
+    )
+
+    # Save forecasts
+    forecast_df = pd.DataFrame({
+        'datetime': forecast_dates,
+        'ARIMA_forecast': forecast_mean,
+        'ARIMA_lower': forecast_conf.iloc[:, 0],
+        'ARIMA_upper': forecast_conf.iloc[:, 1]
+    })
+    forecast_df.to_csv('arima_forecasts_weekly.csv', index=False)
+
+    print("\nWeekly-Only SARIMAX model completed!")
+    print("Forecasts saved to 'arima_forecasts_weekly.csv'")
+
+except Exception as e:
+    print(f"Error in pipeline: {str(e)}")
+    raise
+
+# Cell 36 - Plot Weekly-Only Model Results
+def plot_weekly_model_results(df, forecast_csv, solution_path):
+    """
+    Plot results of the weekly-only model
+    """
+    # Read data files
+    forecasts = pd.read_csv(forecast_csv)
+    forecasts['datetime'] = pd.to_datetime(forecasts['datetime'])
+
+    solution = pd.read_csv(solution_path)
+    solution.index = pd.date_range(start='2016-12-01',
+                                 periods=len(solution),
+                                 freq='H')
+
+    # Get November data
+    november_data = df.loc['2016-11-01':'2016-11-30 23:00:00']
+
+    # Create figure
+    plt.figure(figsize=(15, 10))
+
+    # Plot data
+    plt.plot(november_data.index, november_data['X'],
+             label='November Actual Values',
+             color='#000080',
+             linewidth=2)
+
+    plt.plot(solution.index, solution['X'],
+             label='December Real Values',
+             color='#008000',
+             linewidth=2,
+             linestyle='--')
+
+    plt.plot(pd.date_range(start='2016-12-01', periods=len(forecasts), freq='H'),
+             forecasts['ARIMA_forecast'],
+             label='December Forecasts (Weekly-Only SARIMAX)',
+             color='#FFA500',
+             linewidth=2)
+
+    # Add confidence intervals
+    plt.fill_between(pd.date_range(start='2016-12-01', periods=len(forecasts), freq='H'),
+                    forecasts['ARIMA_lower'],
+                    forecasts['ARIMA_upper'],
+                    color='#FFA500',
+                    alpha=0.2,
+                    label='95% Confidence Interval')
+
+    plt.title('Weekly-Only SARIMAX Model: Forecasts vs Actual Values')
+    plt.ylabel('Traffic Congestion')
+    plt.xlabel('Date')
+    plt.legend()
+    plt.grid(True)
+
+    # Print error metrics
+    print("\nForecast Error Metrics:")
+    mae = mean_absolute_error(solution['X'], forecasts['ARIMA_forecast'])
+    rmse = np.sqrt(mean_squared_error(solution['X'], forecasts['ARIMA_forecast']))
+    mape = np.mean(np.abs((solution['X'] - forecasts['ARIMA_forecast']) / solution['X'])) * 100
+    print(f"MAE: {mae:.4f}")
+    print(f"RMSE: {rmse:.4f}")
+    print(f"MAPE: {mape:.2f}%")
+
+    plt.show()
+
+# Execute the plot
+solution_path = os.path.join('solution', 't2_solution.csv')
+if os.path.exists('arima_forecasts_weekly.csv') and os.path.exists(solution_path):
+    print("Plotting weekly model results...")
+    plot_weekly_model_results(df, 'arima_forecasts_weekly.csv', solution_path)
+else:
+    print("Missing required files. Please check both forecast and solution files exist.")
+
+# Cell 37 - Analyze November-December 2015
+def analyze_2015_holidays(df):
+    """
+    Analyze and visualize traffic patterns for Nov-Dec 2015
+    """
+    # Get the data for Nov-Dec 2015
+    nov_dec_2015 = df.loc['2015-11-01':'2015-12-31']
+
+    # Create figure
+    plt.figure(figsize=(15, 10))
+
+    # Plot entire period
+    plt.plot(nov_dec_2015.index, nov_dec_2015['X'],
+             label='Traffic Congestion',
+             color='blue',
+             linewidth=2)
+
+    # Highlight Christmas period
+    christmas_period = nov_dec_2015.loc['2015-12-24':'2015-12-27']
+    plt.plot(christmas_period.index, christmas_period['X'],
+             color='red',
+             linewidth=2,
+             label='Christmas Period')
+
+    plt.title('Traffic Congestion: November-December 2015')
+    plt.ylabel('Traffic Congestion')
+    plt.xlabel('Date')
+    plt.legend()
+    plt.grid(True)
+
+    # Print some statistics
+    print("\nTraffic Statistics:")
+    print("\nNovember 2015:")
+    nov_stats = df.loc['2015-11-01':'2015-11-30', 'X'].describe()
+    print(nov_stats)
+
+    print("\nDecember 2015:")
+    dec_stats = df.loc['2015-12-01':'2015-12-31', 'X'].describe()
+    print(dec_stats)
+
+    print("\nChristmas Period (24-27 Dec 2015):")
+    christmas_stats = df.loc['2015-12-24':'2015-12-27', 'X'].describe()
+    print(christmas_stats)
+
+    plt.show()
+
+    # Additional plot for daily patterns
+    plt.figure(figsize=(15, 6))
+
+    # Calculate daily means
+    daily_means = nov_dec_2015.groupby(nov_dec_2015.index.date)['X'].mean()
+
+    plt.plot(daily_means.index, daily_means.values,
+             marker='o',
+             linestyle='-',
+             label='Daily Average Traffic')
+
+    plt.title('Daily Average Traffic: November-December 2015')
+    plt.ylabel('Average Traffic Congestion')
+    plt.xlabel('Date')
+    plt.grid(True)
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.legend()
+
+    plt.show()
+
+# Execute the analysis
+analyze_2015_holidays(df)
+
+# Cell 38 - Phase-Adjusted Weekly Features
+def create_phase_adjusted_features(dates):
+    """
+    Create features with phase-adjusted day_sin to align with Thursday start
+    Thursday = 3 in Python's datetime (Mon=0, Sun=6)
+    We need to shift the sine wave so that it peaks on Wednesday (day=2)
+    """
+    features = pd.DataFrame(index=dates)
+
+    # Day of week (0-6) with phase adjustment for Wednesday peak
+    days = 7
+    # Shift phase by 2 days (peak on Wednesday)
+    phase_shift = 2 * np.pi * 2/7  # 2 days shift
+    features['day_sin'] = np.sin(2 * np.pi * dates.dayofweek/days + phase_shift)
+
+    return features
+
+# Cell 39 - Phase-Adjusted SARIMAX Model
+def develop_phase_adjusted_sarimax(train_data):
+    """
+    Develop SARIMAX model with phase-adjusted day_sin regressor
+    """
+    print("=== Phase-Adjusted SARIMAX Model Development ===")
+
+    # Prepare the target variable
+    y = train_data['X'].astype(float)
+    y.index = pd.date_range(start=y.index[0], periods=len(y), freq='H')
+
+    # Create phase-adjusted features
+    exog_train = create_phase_adjusted_features(y.index)
+    print(f"\nIncluded features: {exog_train.columns.tolist()}")
+
+    try:
+        # Fit model
+        model = ARIMA(y,
+                     order=(2, 1, 2),
+                     seasonal_order=(1, 1, 1, 24),
+                     exog=exog_train,
+                     enforce_stationarity=False,
+                     enforce_invertibility=True)
+
+        results = model.fit()
+        print("\nModel Summary:")
+        print(results.summary())
+
+        return results, exog_train
+
+    except Exception as e:
+        print(f"Error fitting model:")
+        print(f"Error message: {str(e)}")
+        raise
+
+# Cell 40 - Generate Phase-Adjusted Forecasts
+def generate_phase_adjusted_forecasts(model, train_data, forecast_horizon=744):
+    """
+    Generate forecasts using the phase-adjusted model
+    """
+    # Create forecast dates
+    forecast_start = train_data.index[-1] + pd.Timedelta(hours=1)
+    forecast_dates = pd.date_range(forecast_start, periods=forecast_horizon, freq='H')
+
+    # Create phase-adjusted features for forecast period
+    exog_forecast = create_phase_adjusted_features(forecast_dates)
+
+    # Generate forecasts
+    forecasts = model.forecast(steps=forecast_horizon, exog=exog_forecast)
+    forecasts = np.maximum(forecasts, 0)  # Ensure non-negative
+
+    # Get confidence intervals
+    conf_int = model.get_forecast(steps=forecast_horizon, exog=exog_forecast).conf_int()
+    conf_int.iloc[:, 0] = np.maximum(conf_int.iloc[:, 0], 0)  # Ensure non-negative lower bound
+
+    return forecasts, conf_int, forecast_dates
+
+# Cell 41 - Run Phase-Adjusted Pipeline
+print("Starting Phase-Adjusted SARIMAX modeling pipeline...")
+
+try:
+    # Train the model
+    phase_adj_model, phase_adj_features = develop_phase_adjusted_sarimax(train_set)
+
+    # Generate forecasts
+    forecast_mean, forecast_conf, forecast_dates = generate_phase_adjusted_forecasts(
+        phase_adj_model,
+        train_set,
+        forecast_horizon=744
+    )
+
+    # Save forecasts
+    forecast_df = pd.DataFrame({
+        'datetime': forecast_dates,
+        'ARIMA_forecast': forecast_mean,
+        'ARIMA_lower': forecast_conf.iloc[:, 0],
+        'ARIMA_upper': forecast_conf.iloc[:, 1]
+    })
+    forecast_df.to_csv('arima_forecasts_phase_adjusted.csv', index=False)
+
+    print("\nPhase-Adjusted SARIMAX model completed!")
+    print("Forecasts saved to 'arima_forecasts_phase_adjusted.csv'")
+
+except Exception as e:
+    print(f"Error in pipeline: {str(e)}")
+    raise
+
+# Cell 42 - Plot Phase-Adjusted Results
+def plot_phase_adjusted_results(df, forecast_csv, solution_path):
+    """
+    Plot results of the phase-adjusted model
+    """
+    # Read data files
+    forecasts = pd.read_csv(forecast_csv)
+    forecasts['datetime'] = pd.to_datetime(forecasts['datetime'])
+
+    solution = pd.read_csv(solution_path)
+    solution.index = pd.date_range(start='2016-12-01',
+                                 periods=len(solution),
+                                 freq='H')
+
+    # Get November data
+    november_data = df.loc['2016-11-01':'2016-11-30 23:00:00']
+
+    # Create figure
+    plt.figure(figsize=(15, 10))
+
+    # Plot data
+    plt.plot(november_data.index, november_data['X'],
+             label='November Actual Values',
+             color='#000080',
+             linewidth=2)
+
+    plt.plot(solution.index, solution['X'],
+             label='December Real Values',
+             color='#008000',
+             linewidth=2,
+             linestyle='--')
+
+    plt.plot(pd.date_range(start='2016-12-01', periods=len(forecasts), freq='H'),
+             forecasts['ARIMA_forecast'],
+             label='December Forecasts (Phase-Adjusted)',
+             color='#FFA500',
+             linewidth=2)
+
+    # Add confidence intervals
+    plt.fill_between(pd.date_range(start='2016-12-01', periods=len(forecasts), freq='H'),
+                    forecasts['ARIMA_lower'],
+                    forecasts['ARIMA_upper'],
+                    color='#FFA500',
+                    alpha=0.2,
+                    label='95% Confidence Interval')
+
+    plt.title('Phase-Adjusted SARIMAX Model: Forecasts vs Actual Values')
+    plt.ylabel('Traffic Congestion')
+    plt.xlabel('Date')
+    plt.legend()
+    plt.grid(True)
+
+    # Print error metrics
+    print("\nForecast Error Metrics:")
+    mae = mean_absolute_error(solution['X'], forecasts['ARIMA_forecast'])
+    rmse = np.sqrt(mean_squared_error(solution['X'], forecasts['ARIMA_forecast']))
+    mape = np.mean(np.abs((solution['X'] - forecasts['ARIMA_forecast']) / solution['X'])) * 100
+    print(f"MAE: {mae:.4f}")
+    print(f"RMSE: {rmse:.4f}")
+    print(f"MAPE: {mape:.2f}%")
+
+    plt.show()
+
+# Execute the plot
+solution_path = os.path.join('solution', 't2_solution.csv')
+if os.path.exists('arima_forecasts_phase_adjusted.csv') and os.path.exists(solution_path):
+    print("Plotting phase-adjusted model results...")
+    plot_phase_adjusted_results(df, 'arima_forecasts_phase_adjusted.csv', solution_path)
+else:
+    print("Missing required files. Please check both forecast and solution files exist.")
+
+
+
+
+
+
+
+
+
+
+
+"""# UCM"""
