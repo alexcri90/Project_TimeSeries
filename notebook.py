@@ -1358,3 +1358,160 @@ if os.path.exists('arima_forecasts_efficient.csv') and os.path.exists(solution_p
     plot_separate_comparisons(df, 'arima_forecasts_efficient.csv', solution_path)
 else:
     print("Missing required files. Please check both forecast and solution files exist.")
+
+"""# Analysis of SARIMA Models for Hourly Traffic Data
+
+## 1. Model Structures and Intuition
+
+### Model 1: SARIMA(2, 1, 2)(1, 1, 1)_24
+
+- **Regular ARIMA part:** \((p,d,q) = (2,1,2)\)  
+  - 2 autoregressive terms (\(\text{AR}(2)\))  
+  - 1 regular difference (\(d = 1\))  
+  - 2 moving average terms (\(\text{MA}(2)\))  
+- **Seasonal part (period = 24 hours):** \((P,D,Q) = (1,1,1)\)  
+  - 1 seasonal AR(\(\Phi_1\)) term  
+  - 1 seasonal difference (\(D = 1\))  
+  - 1 seasonal MA(\(\Theta_1\)) term  
+
+This implies the data has a strong daily seasonal structure and also some short-term hour-to-hour correlations.
+
+The model is:
+
+\[
+\phi_2(B)\,\Phi_1(B^{24})\,(1-B)\,(1-B^{24})\,X_t
+\;=\; \theta_2(B)\,\Theta_1(B^{24})\,\varepsilon_t.
+\]
+
+---
+
+### Model 2: SARIMAX(2, 1, 2)(1, 1, 1)_24 with External Regressors
+
+- **Same SARIMA structure** as Model 1, **plus** external regressors \(\beta' Z_t\):  
+  - \(Z_t\) includes: \(\text{hour_sin}, \text{hour_cos}, \text{day_sin}, \text{day_cos}, \text{christmas_evening}\).  
+
+The equation (simplified) is:
+
+\[
+\phi_2(B)\,\Phi_1(B^{24})\,(1-B)\,(1-B^{24})\,[\,X_t - \beta' Z_t\,]
+\;=\; \theta_2(B)\,\Theta_1(B^{24})\,\varepsilon_t.
+\]
+
+The goal is to see if adding specific cyclical and holiday effects improves the model fit and forecasts.
+
+---
+
+## 2. Comparing Key Fit Statistics
+
+| Model            | Log-Likelihood | AIC         | BIC         |
+|------------------|----------------|-------------|-------------|
+| **Model 1**      | 37587.551      | -75161.101  | -75107.337  |
+| **Model 2**      | 37345.423      | -74666.846  | -74574.679  |
+
+- **Model 1** has a higher log-likelihood (37587 vs. 37345).  
+- **Model 1** also has lower (better) AIC and BIC than Model 2.
+
+By standard information criteria, **Model 1** outperforms **Model 2**, even though Model 2 includes additional regressors.
+
+---
+
+## 3. Parameter Estimates and Significance
+
+### 3.1. Model 1 Parameter Estimates
+
+- **ar.L1:** 1.0280 (p < 0.0001)  
+- **ar.L2:** -0.2997 (p < 0.0001)  
+- **ma.L1:** -1.2680 (p < 0.0001)  
+- **ma.L2:** 0.2727 (p < 0.0001)  
+- **ar.S.L24:** 0.2885 (p < 0.0001)  
+- **ma.S.L24:** -0.9842 (p < 0.0001)  
+- **\(\sigma^2\):** 0.0005  
+
+**Implications:**
+
+1. **Nonseasonal AR(1) is slightly above 1**: Could indicate a high level of persistence, but combined with differencing and other terms, it may still be stationary in practice.  
+2. **Nonseasonal AR(2) is negative**: Suggests hour-to-hour dynamics might reverse after 2 lags.  
+3. **Large negative MA(1)**: Implies strong “shock” corrections from one hour to the next.  
+4. **Seasonal terms** show a strong daily pattern (24-hour). The large negative seasonal MA suggests strong correction day-to-day at the same hour.  
+5. **Very small \(\sigma^2\)** on the differenced scale indicates a tight fit.
+
+---
+
+### 3.2. Model 2 Parameter Estimates
+
+- **External Regressors**:  
+  - **hour_sin:** ~\(-3.36 \times 10^{-9}\), p=0.96 (not significant)  
+  - **hour_cos:** ~\(1.03 \times 10^{-9}\), p=0.98 (not significant)  
+  - **day_sin:** 0.0144, p<0.0001 (significant)  
+  - **day_cos:** 0.0007, p=0.49 (not significant)  
+  - **christmas_evening:** 0.0236, p<0.0001 (significant)  
+
+- **ARMA terms**:  
+  - **ar.L1:** 0.0284 (p=0.82, not significant)  
+  - **ar.L2:** 0.3529 (p<0.0001, significant)  
+  - **ma.L1:** -0.3691 (p=0.003, significant)  
+  - **ma.L2:** -0.6173 (p<0.0001, significant)  
+  - **ar.S.L24:** 0.2995 (p<0.0001, significant)  
+  - **ma.S.L24:** -0.9420 (p<0.0001, significant)  
+
+- **\(\sigma^2\):** 0.0006  
+
+**Implications:**
+
+1. **hour_sin/cos are effectively zero** and not significant, suggesting the 24-hour seasonal ARIMA structure itself captures the diurnal pattern.  
+2. **day_sin is significant**, indicating a weekly cycle not fully captured by the 24-hour differencing.  
+3. **day_cos is not significant**. Possibly day_sin alone is enough, or there’s collinearity.  
+4. **christmas_evening is significant**, indicating a unique effect around Christmas.  
+5. **AR(1) is no longer significant** once external regressors are added.  
+6. The overall \(\sigma^2\) is slightly larger than in Model 1, and AIC/BIC are worse.
+
+---
+
+## 4. Residual Diagnostics
+
+- **Ljung-Box (L1) (Q):**  
+  - Model 1: 1.22 (p=0.27)  
+  - Model 2: 105.71 (p=0.00)  
+
+  Model 2’s residuals show significant autocorrelation at lag 1, whereas Model 1’s residuals do not.
+
+- **Jarque-Bera (JB):** Extremely large for both, indicating **non-normality** in residuals. This is common in traffic data.  
+- **Heteroskedasticity (H) tests:** Both show p-values suggesting some non-constant variance in residuals (again, common in traffic contexts).
+
+---
+
+## 5. Overall Implications & Next Steps
+
+1. **Model 1 (Pure SARIMA) Outperforms Model 2 (SARIMAX)**  
+   - Lower AIC/BIC and higher log-likelihood indicate a better fit.  
+   - The added regressors (especially hour_sin, hour_cos) don’t help much beyond what the 24-hour seasonal differencing already provides.
+
+2. **Significant Regressors** in Model 2 (day_sin, christmas_evening) do show real effects, but the overall fit doesn’t improve enough to beat Model 1 in penalized-likelihood terms.
+
+3. **Potential Over-Differencing / High Persistence**  
+   - AR(1) near or above 1 can happen; ensure stationarity conditions hold by checking inverse roots.
+
+4. **Residual Diagnostics**  
+   - Both models deviate from normality and may have heteroskedasticity. For best forecast intervals, consider alternative error structures or transformations.
+
+5. **Choosing the “Best” Model**  
+   - If you want the best numeric fit and forecasts, **Model 1** appears superior.  
+   - If interpretability about weekly or holiday effects is crucial, you could still consider a SARIMAX approach (perhaps removing hour_sin/hour_cos and optimizing further).
+
+6. **Next Steps**  
+   - Try a model that keeps “day_sin” and “christmas_evening” but omits the unhelpful hour_sin/hour_cos terms.  
+   - Consider multi-seasonal approaches (e.g., 24-hour + 168-hour for weekly seasonality), or day-of-week dummies.  
+   - Consider variance-stabilizing transformations if the raw residuals show heavy skew/kurtosis.
+
+---
+
+## 6. Summary
+
+- **Model 1**: By AIC/BIC, this is the better-fitting model for hourly traffic. It captures strong daily seasonality and short-term AR/MA components.  
+- **Model 2**: Although it includes meaningful regressors (especially day-of-week and holiday effects), it does not outperform Model 1 in overall fit. The 24-hour seasonal differencing/ARMA already explains much of the diurnal pattern, leaving the cyclical hour regressors insignificant.  
+- **Residuals**: Both models have non-normal, possibly heteroskedastic residuals, which is not unusual in traffic data.  
+
+In practice, **Model 1** might be the simpler, better choice for forecasting hourly traffic, while **Model 2** has added interpretability regarding holiday and weekly patterns but does not necessarily improve forecast accuracy.
+
+# UCM
+"""
