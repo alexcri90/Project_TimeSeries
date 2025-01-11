@@ -2107,14 +2107,309 @@ if os.path.exists('arima_forecasts_phase_adjusted.csv') and os.path.exists(solut
 else:
     print("Missing required files. Please check both forecast and solution files exist.")
 
-
-
-
-
-
-
-
-
-
-
 """# UCM"""
+
+# Cell 43 - UCM Setup and Imports
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from statsmodels.tsa.statespace.structural import UnobservedComponents
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+import warnings
+warnings.filterwarnings('ignore')
+
+# Plot settings
+plt.style.use('default')
+sns.set_style("whitegrid")
+plt.rcParams['figure.figsize'] = [12, 8]
+plt.rcParams['figure.dpi'] = 100
+
+def create_ucm_features(dates):
+    """
+    Create features for UCM models
+    """
+    features = pd.DataFrame(index=dates)
+
+    # Weekly pattern (0-6) as sine wave with proper phase
+    days = 7
+    phase_shift = 2 * np.pi * 2/7  # Peak on Wednesday
+    features['day_sin'] = np.sin(2 * np.pi * dates.dayofweek/days + phase_shift)
+
+    # Christmas evening indicator
+    christmas_evenings = ((dates.day.isin([25, 26])) &
+                         (dates.hour.isin(range(20, 24))) |
+                         (dates.day.isin([26, 27])) &
+                         (dates.hour.isin(range(0, 6))))
+    features['christmas_evening'] = christmas_evenings.astype(int)
+
+    return features
+
+# Cell 44 (Modified) - Base UCM Model with Constrained Forecasting
+def forecast_ucm(model, steps=744):
+    """
+    Generate forecasts from UCM model with constrained uncertainty
+    """
+    # Get the basic forecast
+    forecast = model.forecast(steps=steps)
+
+    # Calculate constrained prediction intervals
+    sigma2_irregular = model.params['sigma2.irregular']
+    sigma2_level = model.params['sigma2.level']
+    sigma2_seasonal = model.params['sigma2.seasonal']
+
+    # Calculate base variance for one period (24 hours)
+    base_var = sigma2_irregular + sigma2_level + sigma2_seasonal
+
+    # Calculate variance for each forecast step
+    # Constrain growth to maximum of 3 seasonal cycles
+    forecast_var = np.zeros(steps)
+    for i in range(steps):
+        # Calculate how many complete seasonal cycles we're forecasting
+        cycles = min(i / 24, 3)  # Cap at 3 cycles
+        forecast_var[i] = base_var * (1 + cycles * 0.1)  # 10% increase per cycle
+
+    # Create confidence intervals
+    z_score = 1.96  # 95% confidence
+    ci_lower = forecast - z_score * np.sqrt(forecast_var)
+    ci_upper = forecast + z_score * np.sqrt(forecast_var)
+
+    # Ensure non-negative values
+    ci_lower = np.maximum(ci_lower, 0)
+
+    return forecast, pd.DataFrame({
+        'lower': ci_lower,
+        'upper': ci_upper
+    })
+
+# Cell 45 (Modified) - Enhanced UCM Model with Better Forecasting
+def forecast_enhanced_ucm(model, train_data, forecast_dates, steps=744):
+    """
+    Generate forecasts from enhanced UCM model with constrained uncertainty
+    Includes weekly seasonality via day_sin
+    """
+    # Create features for forecast period
+    exog_forecast = create_ucm_features(forecast_dates)['day_sin']
+
+    # Get the basic forecast
+    forecast = model.forecast(steps=steps, exog=exog_forecast)
+
+    # Calculate constrained prediction intervals
+    sigma2_irregular = model.params['sigma2.irregular']
+    sigma2_level = model.params['sigma2.level']
+    sigma2_seasonal = model.params['sigma2.seasonal']
+
+    # Calculate base variance for one period (24 hours)
+    base_var = sigma2_irregular + sigma2_level + sigma2_seasonal
+
+    # Calculate variance for each forecast step
+    forecast_var = np.zeros(steps)
+    for i in range(steps):
+        # Calculate how many complete seasonal cycles we're forecasting
+        cycles = min(i / 24, 3)  # Cap at 3 cycles
+        # Add a small additional uncertainty for weekly pattern
+        weekly_uncertainty = 0.05 * (i / (24 * 7))  # 5% increase per week
+        forecast_var[i] = base_var * (1 + cycles * 0.1 + min(weekly_uncertainty, 0.15))
+
+    # Create confidence intervals
+    z_score = 1.96  # 95% confidence
+    ci_lower = forecast - z_score * np.sqrt(forecast_var)
+    ci_upper = forecast + z_score * np.sqrt(forecast_var)
+
+    # Ensure non-negative values
+    ci_lower = np.maximum(ci_lower, 0)
+
+    return forecast, pd.DataFrame({
+        'lower': ci_lower,
+        'upper': ci_upper
+    })
+
+# Cell 46 (Modified) - Final UCM Model with Better Forecasting
+def forecast_final_ucm(model, train_data, forecast_dates, steps=744):
+    """
+    Generate forecasts from final UCM model with constrained uncertainty
+    Includes weekly seasonality and Christmas effect
+    """
+    # Create features for forecast period
+    exog_forecast = create_ucm_features(forecast_dates)
+
+    # Get the basic forecast
+    forecast = model.forecast(steps=steps, exog=exog_forecast)
+
+    # Calculate constrained prediction intervals
+    sigma2_irregular = model.params['sigma2.irregular']
+    sigma2_level = model.params['sigma2.level']
+    sigma2_seasonal = model.params['sigma2.seasonal']
+
+    # Calculate base variance for one period (24 hours)
+    base_var = sigma2_irregular + sigma2_level + sigma2_seasonal
+
+    # Calculate variance for each forecast step
+    forecast_var = np.zeros(steps)
+    for i in range(steps):
+        # Calculate how many complete seasonal cycles we're forecasting
+        cycles = min(i / 24, 3)  # Cap at 3 cycles
+        # Add a small additional uncertainty for weekly pattern
+        weekly_uncertainty = 0.05 * (i / (24 * 7))  # 5% increase per week
+
+        # Additional uncertainty during Christmas period
+        is_christmas = exog_forecast['christmas_evening'].iloc[i] == 1
+        christmas_factor = 0.2 if is_christmas else 0
+
+        forecast_var[i] = base_var * (1 + cycles * 0.1 +
+                                    min(weekly_uncertainty, 0.15) +
+                                    christmas_factor)
+
+    # Create confidence intervals
+    z_score = 1.96  # 95% confidence
+    ci_lower = forecast - z_score * np.sqrt(forecast_var)
+    ci_upper = forecast + z_score * np.sqrt(forecast_var)
+
+    # Ensure non-negative values
+    ci_lower = np.maximum(ci_lower, 0)
+
+    return forecast, pd.DataFrame({
+        'lower': ci_lower,
+        'upper': ci_upper
+    })
+
+# Cell 47 - Run UCM Pipeline and Compare Models
+print("Starting UCM modeling pipeline...")
+
+try:
+    # Create forecast dates
+    forecast_dates = pd.date_range(
+        start=train_set.index[-1] + pd.Timedelta(hours=1),
+        periods=744,
+        freq='H'
+    )
+
+    # Fit models
+    base_model = fit_base_ucm(train_set)
+    enhanced_model = fit_enhanced_ucm(train_set)
+    final_model = fit_final_ucm(train_set)
+
+    # Generate forecasts
+    base_forecast, base_ci = forecast_ucm(base_model)
+    enhanced_forecast, enhanced_ci = forecast_enhanced_ucm(
+        enhanced_model, train_set, forecast_dates
+    )
+    final_forecast, final_ci = forecast_final_ucm(
+        final_model, train_set, forecast_dates
+    )
+
+    # Save forecasts
+    for name, forecast, ci in [
+        ('base', base_forecast, base_ci),
+        ('enhanced', enhanced_forecast, enhanced_ci),
+        ('final', final_forecast, final_ci)
+    ]:
+        forecast_df = pd.DataFrame({
+            'datetime': forecast_dates,
+            'UCM_forecast': forecast,
+            'UCM_lower': ci.iloc[:, 0],
+            'UCM_upper': ci.iloc[:, 1]
+        })
+        forecast_df.to_csv(f'ucm_forecasts_{name}.csv', index=False)
+
+    print("\nUCM modeling pipeline completed!")
+
+except Exception as e:
+    print(f"Error in UCM pipeline: {str(e)}")
+    raise
+
+# Cell 48 (Updated) - Plot Individual UCM Results
+def plot_individual_ucm_results(df, solution_path):
+    """
+    Create separate plots for each UCM model
+    """
+    # Read solution
+    solution = pd.read_csv(solution_path)
+    solution.index = pd.date_range(
+        start='2016-12-01',
+        periods=len(solution),
+        freq='H'
+    )
+
+    # Get November data
+    november_data = df.loc['2016-11-01':'2016-11-30 23:00:00']
+
+    # Colors for consistency
+    actual_color = '#000080'  # Dark Blue
+    forecast_color = '#FFA500'  # Orange
+    solution_color = '#008000'  # Green
+
+    # Create plots for each model
+    for name in ['base', 'enhanced', 'final']:
+        # Read forecast data
+        forecast_df = pd.read_csv(f'ucm_forecasts_{name}.csv')
+        forecast_df['datetime'] = pd.to_datetime(forecast_df['datetime'])
+
+        # Create figure
+        plt.figure(figsize=(15, 8))
+
+        # Plot actual November data
+        plt.plot(november_data.index, november_data['X'],
+                label='November Actual Values',
+                color=actual_color,
+                linewidth=2)
+
+        # Plot December solution
+        plt.plot(solution.index, solution['X'],
+                label='December Real Values',
+                color=solution_color,
+                linewidth=2,
+                linestyle='--')
+
+        # Plot forecast
+        plt.plot(pd.date_range(start='2016-12-01', periods=len(forecast_df), freq='H'),
+                forecast_df['UCM_forecast'],
+                label=f'December Forecast ({name.title()} UCM)',
+                color=forecast_color,
+                linewidth=2)
+
+        # Add confidence intervals
+        plt.fill_between(
+            pd.date_range(start='2016-12-01', periods=len(forecast_df), freq='H'),
+            forecast_df['UCM_lower'],
+            forecast_df['UCM_upper'],
+            color=forecast_color,
+            alpha=0.2,
+            label='95% Confidence Interval'
+        )
+
+        # Customize plot
+        plt.title(f'{name.title()} UCM Model: Forecasts vs Actual Values')
+        plt.ylabel('Traffic Congestion')
+        plt.xlabel('Date')
+        plt.legend()
+        plt.grid(True)
+
+        # Add error metrics as text box
+        mae = mean_absolute_error(solution['X'], forecast_df['UCM_forecast'])
+        rmse = np.sqrt(mean_squared_error(solution['X'], forecast_df['UCM_forecast']))
+        metrics_text = f'MAE: {mae:.4f}\nRMSE: {rmse:.4f}'
+        plt.text(0.02, 0.98, metrics_text,
+                transform=plt.gca().transAxes,
+                verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+        plt.tight_layout()
+        plt.show()
+
+        # Print metrics
+        print(f"\n{name.title()} UCM Error Metrics:")
+        print(f"MAE: {mae:.4f}")
+        print(f"RMSE: {rmse:.4f}")
+
+# Execute the plot
+solution_path = os.path.join('solution', 't2_solution.csv')
+if all(os.path.exists(f'ucm_forecasts_{name}.csv')
+       for name in ['base', 'enhanced', 'final']) \
+   and os.path.exists(solution_path):
+    print("Plotting individual UCM results...")
+    plot_individual_ucm_results(df, solution_path)
+else:
+    print("Missing required files. Please run the UCM pipeline first.")
+
+"""# MACHINE LEARNING"""
