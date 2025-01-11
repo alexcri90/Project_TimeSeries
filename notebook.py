@@ -11,11 +11,13 @@ Original file is located at
 ## Package Installation
 """
 
+# Commented out IPython magic to ensure Python compatibility.
 # %pip install pandas matplotlib numpy seaborn scikit-learn xgboost patsy statsmodels
 # %pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 # %pip install seaborn
 # %pip install pmdarima
 # %pip install tqdm
+# %pip install lightgbm
 
 """## Imports and GPU Configuration"""
 
@@ -1516,7 +1518,7 @@ In practice, **Model 1** might be the simpler, better choice for forecasting hou
 # Model 3: SARIMAX(2,1,2)(1,1,1)_24 more efficient
 """
 
-# Cell 27 - New Feature Creation Function
+# Cell 25 - New Feature Creation Function
 def create_refined_features(dates):
     """
     Create features: only day_cos and christmas_evening
@@ -1536,7 +1538,7 @@ def create_refined_features(dates):
 
     return features
 
-# Cell 28 - Refined SARIMAX Model Development
+# Cell 26 - Refined SARIMAX Model Development
 def develop_refined_sarimax(train_data):
     """
     Develop SARIMAX model with day_cos and christmas_evening regressors
@@ -1572,7 +1574,7 @@ def develop_refined_sarimax(train_data):
         print(f"Error message: {str(e)}")
         raise
 
-# Cell 29 - Generate Forecasts for Refined Model
+# Cell 27 - Generate Forecasts for Refined Model
 def generate_refined_forecasts(model, train_data, forecast_horizon=744):
     """
     Generate forecasts using the refined model
@@ -1594,7 +1596,7 @@ def generate_refined_forecasts(model, train_data, forecast_horizon=744):
 
     return forecasts, conf_int, forecast_dates
 
-# Cell 30 - Run Refined SARIMAX Pipeline
+# Cell 38 - Run Refined SARIMAX Pipeline
 print("Starting Refined SARIMAX modeling pipeline...")
 
 try:
@@ -1620,7 +1622,7 @@ except Exception as e:
     print(f"Error in pipeline: {str(e)}")
     raise
 
-# Cell 31 - Plot Results
+# Cell 29 - Plot Results
 def plot_refined_model_results(df, forecast_csv, solution_path):
     """
     Plot results of the refined model
@@ -1691,7 +1693,7 @@ if os.path.exists('arima_forecasts_refined.csv') and os.path.exists(solution_pat
 else:
     print("Missing required files. Please check both forecast and solution files exist.")
 
-# Cell 32 - Feature Creation Without Christmas
+# Cell 30 - Feature Creation Without Christmas
 def create_weekly_features(dates):
     """
     Create features: only day_sin
@@ -1704,7 +1706,7 @@ def create_weekly_features(dates):
 
     return features
 
-# Cell 33 - SARIMAX Model Without Christmas Effect
+# Cell 31 - SARIMAX Model Without Christmas Effect
 def develop_weekly_sarimax(train_data):
     """
     Develop SARIMAX model with only day_sin regressor
@@ -1739,7 +1741,7 @@ def develop_weekly_sarimax(train_data):
         print(f"Error message: {str(e)}")
         raise
 
-# Cell 34 - Generate Forecasts for Weekly-Only Model
+# Cell 32 - Generate Forecasts for Weekly-Only Model
 def generate_weekly_forecasts(model, train_data, forecast_horizon=744):
     """
     Generate forecasts using the weekly-only model
@@ -1761,7 +1763,7 @@ def generate_weekly_forecasts(model, train_data, forecast_horizon=744):
 
     return forecasts, conf_int, forecast_dates
 
-# Cell 35 (Updated) - Run Weekly-Only Pipeline
+# Cell 33 - Run Weekly-Only Pipeline
 print("Starting Weekly-Only SARIMAX modeling pipeline...")
 
 try:
@@ -1791,7 +1793,7 @@ except Exception as e:
     print(f"Error in pipeline: {str(e)}")
     raise
 
-# Cell 36 - Plot Weekly-Only Model Results
+# Cell 34 - Plot Weekly-Only Model Results
 def plot_weekly_model_results(df, forecast_csv, solution_path):
     """
     Plot results of the weekly-only model
@@ -1862,7 +1864,7 @@ if os.path.exists('arima_forecasts_weekly.csv') and os.path.exists(solution_path
 else:
     print("Missing required files. Please check both forecast and solution files exist.")
 
-# Cell 37 - Analyze November-December 2015
+# Cell 35 - Analyze November-December 2015
 def analyze_2015_holidays(df):
     """
     Analyze and visualize traffic patterns for Nov-Dec 2015
@@ -1932,7 +1934,7 @@ def analyze_2015_holidays(df):
 # Execute the analysis
 analyze_2015_holidays(df)
 
-# Cell 38 - Phase-Adjusted Weekly Features
+# Cell 36 - Phase-Adjusted Weekly Features
 def create_phase_adjusted_features(dates):
     """
     Create features with phase-adjusted day_sin to align with Thursday start
@@ -1949,7 +1951,7 @@ def create_phase_adjusted_features(dates):
 
     return features
 
-# Cell 39 - Phase-Adjusted SARIMAX Model
+# Cell 37 - Phase-Adjusted SARIMAX Model
 def develop_phase_adjusted_sarimax(train_data):
     """
     Develop SARIMAX model with phase-adjusted day_sin regressor
@@ -1984,7 +1986,7 @@ def develop_phase_adjusted_sarimax(train_data):
         print(f"Error message: {str(e)}")
         raise
 
-# Cell 40 - Generate Phase-Adjusted Forecasts
+# Cell 38 - Generate Phase-Adjusted Forecasts
 def generate_phase_adjusted_forecasts(model, train_data, forecast_horizon=744):
     """
     Generate forecasts using the phase-adjusted model
@@ -2006,7 +2008,7 @@ def generate_phase_adjusted_forecasts(model, train_data, forecast_horizon=744):
 
     return forecasts, conf_int, forecast_dates
 
-# Cell 41 - Run Phase-Adjusted Pipeline
+# Cell 39 - Run Phase-Adjusted Pipeline
 print("Starting Phase-Adjusted SARIMAX modeling pipeline...")
 
 try:
@@ -2036,7 +2038,7 @@ except Exception as e:
     print(f"Error in pipeline: {str(e)}")
     raise
 
-# Cell 42 - Plot Phase-Adjusted Results
+# Cell 40 - Plot Phase-Adjusted Results
 def plot_phase_adjusted_results(df, forecast_csv, solution_path):
     """
     Plot results of the phase-adjusted model
@@ -2109,7 +2111,7 @@ else:
 
 """# UCM"""
 
-# Cell 43 - UCM Setup and Imports
+# Cell 41 - UCM Setup and Imports
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -2145,7 +2147,7 @@ def create_ucm_features(dates):
 
     return features
 
-# Cell 44 (Modified) - Base UCM Model with Constrained Forecasting
+# Cell 42 - Base UCM Model with Constrained Forecasting
 def forecast_ucm(model, steps=744):
     """
     Generate forecasts from UCM model with constrained uncertainty
@@ -2182,7 +2184,7 @@ def forecast_ucm(model, steps=744):
         'upper': ci_upper
     })
 
-# Cell 45 (Modified) - Enhanced UCM Model with Better Forecasting
+# Cell 43 - Enhanced UCM Model with Better Forecasting
 def forecast_enhanced_ucm(model, train_data, forecast_dates, steps=744):
     """
     Generate forecasts from enhanced UCM model with constrained uncertainty
@@ -2224,7 +2226,7 @@ def forecast_enhanced_ucm(model, train_data, forecast_dates, steps=744):
         'upper': ci_upper
     })
 
-# Cell 46 (Modified) - Final UCM Model with Better Forecasting
+# Cell 44 - Final UCM Model with Better Forecasting
 def forecast_final_ucm(model, train_data, forecast_dates, steps=744):
     """
     Generate forecasts from final UCM model with constrained uncertainty
@@ -2273,7 +2275,7 @@ def forecast_final_ucm(model, train_data, forecast_dates, steps=744):
         'upper': ci_upper
     })
 
-# Cell 47 - Run UCM Pipeline and Compare Models
+# Cell 45 - Run UCM Pipeline and Compare Models
 print("Starting UCM modeling pipeline...")
 
 try:
@@ -2318,7 +2320,7 @@ except Exception as e:
     print(f"Error in UCM pipeline: {str(e)}")
     raise
 
-# Cell 48 (Updated) - Plot Individual UCM Results
+# Cell 46 - Plot Individual UCM Results
 def plot_individual_ucm_results(df, solution_path):
     """
     Create separate plots for each UCM model
