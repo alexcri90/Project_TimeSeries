@@ -2415,3 +2415,361 @@ else:
     print("Missing required files. Please run the UCM pipeline first.")
 
 """# MACHINE LEARNING"""
+
+# Cell 47 - Additional ML Imports
+
+import xgboost as xgb
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+import pickle  # For saving the trained model if needed
+
+print("Additional ML libraries imported!")
+
+# Cell 48 - Create a Function to Build a Supervised Dataset
+
+def create_supervised_dataset(df, target_col='X', lags=[1, 24], lead=1):
+    """
+    Converts a time-indexed DataFrame into a supervised learning dataset.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Your time series DataFrame with a DateTime index.
+    target_col : str
+        The column name for the target variable (e.g., traffic congestion).
+    lags : list
+        The list of 'lag' offsets to include as features. For example:
+            [1, 24] means X(t-1) and X(t-24).
+    lead : int
+        How far ahead to forecast. lead=1 => next hour, lead=24 => next day.
+
+    Returns:
+    --------
+    X_data : pd.DataFrame
+        Feature matrix
+    y_data : pd.Series
+        Corresponding target values
+    """
+
+    df_supervised = df.copy()
+
+    # Create lag features
+    for lag in lags:
+        df_supervised[f'lag_{lag}'] = df_supervised[target_col].shift(lag)
+
+    # Create lead target
+    # 'lead=1' means we want to predict X(t+1) using features at time t
+    df_supervised[f'y_lead_{lead}'] = df_supervised[target_col].shift(-lead)
+
+    # Drop any rows with NaNs introduced by shifting
+    df_supervised.dropna(inplace=True)
+
+    # Define X and y
+    feature_cols = [col for col in df_supervised.columns if col.startswith('lag_')
+                    or col in ['hour', 'day_of_week', 'month', 'is_weekend',
+                               'rolling_mean_24h', 'rolling_std_24h']]
+    X_data = df_supervised[feature_cols]
+    y_data = df_supervised[f'y_lead_{lead}']
+
+    return X_data, y_data
+
+# Cell 49 - Prepare the Data and Create Train/Validation Sets
+
+# Suppose we want to forecast 1 hour ahead
+lead = 1
+lag_list = [1, 24]  # Feel free to add more, e.g. 2, 3, 6, 12, etc.
+
+X_all, y_all = create_supervised_dataset(df_processed,
+                                         target_col='X',
+                                         lags=lag_list,
+                                         lead=lead)
+
+X_all.drop(['rolling_mean_24h','rolling_std_24h'], axis=1, errors='ignore', inplace=True)
+
+# Convert to NumPy arrays or keep as DataFrame
+X_all_values = X_all.values
+y_all_values = y_all.values
+
+# We can do a time-based train/val split:
+# Let's say we keep the last 'validation_size' rows for validation
+validation_size = 744  # last month or 31 days * 24h
+train_size = len(X_all) - validation_size
+
+X_train, X_val = X_all_values[:train_size], X_all_values[train_size:]
+y_train, y_val = y_all_values[:train_size], y_all_values[train_size:]
+
+print("Training set size:", X_train.shape, y_train.shape)
+print("Validation set size:", X_val.shape, y_val.shape)
+
+# Cell 50 - Train and Evaluate an XGBoost Model
+
+# Create DMatrix objects for XGBoost
+dtrain = xgb.DMatrix(X_train, label=y_train)
+dval = xgb.DMatrix(X_val, label=y_val)
+
+# Define XGBoost parameters (these are just a starting point)
+xgb_params = {
+    'objective': 'reg:squarederror',
+    'eval_metric': 'rmse',
+    'eta': 0.1,          # learning rate
+    'max_depth': 6,      # depth of each tree
+    'subsample': 0.8,
+    'colsample_bytree': 0.8,
+    'seed': 42
+}
+
+# Train the model
+evals = [(dtrain, 'train'), (dval, 'eval')]
+bst = xgb.train(params=xgb_params,
+                dtrain=dtrain,
+                num_boost_round=500,
+                early_stopping_rounds=20,
+                evals=evals,
+                verbose_eval=50)
+
+# Make predictions on the validation set
+y_val_pred = bst.predict(dval)
+
+# Evaluate performance
+rmse_val = np.sqrt(mean_squared_error(y_val, y_val_pred))
+mae_val = mean_absolute_error(y_val, y_val_pred)
+mape_val = np.mean(np.abs((y_val - y_val_pred) / y_val)) * 100
+
+print(f"Validation RMSE: {rmse_val:.4f}")
+print(f"Validation MAE:  {mae_val:.4f}")
+print(f"Validation MAPE: {mape_val:.2f}%")
+
+# Cell 51 - Visualize ML Model Predictions vs Actual on Validation Set
+
+val_index = X_all.index[train_size:]  # If X_all is a DataFrame with the same index
+# If X_all isn't a DataFrame with an index, you can reconstruct from df_processed or use a date range.
+
+import matplotlib.dates as mdates
+
+plt.figure(figsize=(15, 6))
+
+plt.plot(val_index, y_val, label='Actual', color='blue')
+plt.plot(val_index, y_val_pred, label='XGBoost Predictions', color='red', linestyle='--')
+plt.title('XGBoost Model - Validation Set Predictions')
+plt.xlabel('DateTime')
+plt.ylabel('Traffic Congestion')
+plt.legend()
+plt.grid(True)
+
+# Format x-axis if desired
+plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+# Cell 52 - Check Feature Importance and Save the Model
+
+# Plot feature importance
+xgb.plot_importance(bst, max_num_features=10, importance_type='gain')
+plt.title('Feature Importance (Gain)')
+plt.show()
+
+# Save the trained model
+bst.save_model('xgb_traffic_congestion.model')
+
+# Or using pickle:
+# with open('xgb_traffic_model.pkl', 'wb') as f:
+#     pickle.dump(bst, f)
+
+# Cell 53 - Recursive forecaster for December 2016
+def forecast_december_2016_xgb(model, df_processed, start_date='2016-12-01', end_date='2016-12-31 23:00:00'):
+    """
+    Recursively forecast December 2016 (744 hours) using the trained XGBoost model.
+    We'll:
+    1) Start from the last known row (Nov 30, 2016),
+    2) For each hour in December, create the required lag features,
+    3) Predict X(t+1),
+    4) Append the prediction to our dataset so we can use it as a lag for the next step.
+
+    Returns:
+      forecast_df (pd.DataFrame) with datetime, predicted, and naive +/-1.96*std intervals.
+    """
+
+    # 1) We need the standard deviation of residuals from training to create naive intervals
+    #    If you haven't saved residuals, we can quickly compute them from the training set.
+    #    The easiest is to re-predict on the training set:
+    from copy import deepcopy
+    import numpy as np
+
+    X_train = xgb.DMatrix(X_train_global)  # We'll define X_train_global in the next cell
+    y_train_pred = model.predict(X_train)
+    train_resid = y_train_global - y_train_pred
+    resid_std = np.std(train_resid)  # standard deviation of training residuals
+
+    # 2) We'll copy df_processed so as not to modify the original
+    df_copy = df_processed.copy()
+
+    # We'll ensure our DataFrame is sorted and we only do the recursive from the last known date
+    df_copy.sort_index(inplace=True)
+    last_known_time = pd.Timestamp('2016-11-30 23:00:00')
+
+    # 3) Build an empty list to store predictions
+    future_preds = []
+
+    # 4) We'll create a range of timestamps from 2016-12-01 to 2016-12-31 23:00:00
+    future_dates = pd.date_range(start=start_date, end=end_date, freq='H')
+
+    # 5) Recursive loop
+    current_time = last_known_time
+    for future_time in future_dates:
+        # Create row of features for 'future_time - 1 hour' if we want to predict this hour
+        # Actually, since we used "lead=1", we want to predict X(future_time) using data as of (future_time - 1h).
+
+        # We'll define a small function to build the feature row:
+        row_features = build_feature_row(df_copy, future_time - pd.Timedelta(hours=1))
+
+        # Make a single prediction using the model
+        dpred = xgb.DMatrix(row_features)
+        pred_value = model.predict(dpred)[0]
+
+        # Append the predicted value as X(future_time) to the DataFrame
+        new_row = {
+            'X': pred_value,
+            'hour': future_time.hour,
+            'day_of_week': future_time.dayofweek,
+            'month': future_time.month,
+            'is_weekend': 1 if future_time.dayofweek in [5, 6] else 0
+            # If you rely on rolling_mean_24h or rolling_std_24h,
+            # you'd need a dynamic way to update them.
+            # For simplicity, we won't recalc rolling stats here
+            # (or you can do a more advanced approach).
+        }
+        df_copy.loc[future_time] = new_row
+
+        # Save the final predicted value for plotting
+        future_preds.append((future_time, pred_value))
+
+    # 6) Build a forecast DataFrame
+    forecast_df = pd.DataFrame(future_preds, columns=['datetime', 'XGB_forecast'])
+    forecast_df.set_index('datetime', inplace=True)
+
+    # 7) Compute naive confidence intervals
+    #    +/- 1.96 * resid_std
+    ci = 1.96 * resid_std
+    forecast_df['lower'] = forecast_df['XGB_forecast'].apply(lambda x: max(x - ci, 0))  # non-negative
+    forecast_df['upper'] = forecast_df['XGB_forecast'] + ci
+
+    return forecast_df
+
+
+def build_feature_row(df_processed, ref_time):
+    """
+    Build a single row of features for XGBoost based on:
+      - X(t-1), X(t-24),
+      - hour, day_of_week, month, is_weekend
+      - rolling_mean_24h, rolling_std_24h (if feasible).
+
+    Returns: a one-row DataFrame matching the columns used by X_train.
+    """
+    # For clarity, let's just implement the same lags from the create_supervised_dataset
+    # Note: This function must replicate the logic of "lag_1, lag_24, plus any other features"
+    import pandas as pd
+
+    # We'll gather the row that corresponds to ref_time in df_processed
+    # (We assume it already exists in df_copy if we do recursive approach)
+    if ref_time not in df_processed.index:
+        # If not found, just create a row of zeros or do something
+        # But ideally, your code ensures continuity.
+        return pd.DataFrame([0], columns=['lag_1'])  # minimal fallback
+
+    # We'll build a dictionary for each feature
+    row_dict = {}
+
+    # lag_1 means X at ref_time
+    row_dict['lag_1'] = df_processed.loc[ref_time, 'X'] if ref_time in df_processed.index else 0.0
+
+    # lag_24 means X at ref_time - 23 hours
+    # (Be careful that if we want X(t-24), that means 24 hours behind the 'ref_time+1'...
+    # We'll keep it consistent with create_supervised_dataset's logic.)
+    lag_24_time = ref_time - pd.Timedelta(hours=23)  # or 24, depending on your definition
+    row_dict['lag_24'] = df_processed.loc[lag_24_time, 'X'] if lag_24_time in df_processed.index else 0.0
+
+    # hour, day_of_week, month, is_weekend
+    row_dict['hour'] = ref_time.hour
+    row_dict['day_of_week'] = ref_time.dayofweek
+    row_dict['month'] = ref_time.month
+    row_dict['is_weekend'] = 1 if ref_time.dayofweek in [5, 6] else 0
+
+    # If you want rolling stats, you'd have to keep them updated.
+    # For simplicity, let's skip.
+    # If you do want them, you must recalc them from the newly appended predictions.
+
+    # Convert to DataFrame with the same column order as X_train_global
+    row_df = pd.DataFrame([row_dict])
+    row_df = row_df[X_train_columns_global]  # ensure same column order
+    return row_df
+
+# Cell 54 - Generate December 2016 Forecast and Plot with Nov 2016 + Real Values
+
+# 1) We must define X_train_global, y_train_global, X_train_columns_global for the function above
+#    These are basically the final arrays or data frames used in training.
+#    We'll name them consistently here:
+
+X_train_global = X_train  # from your prior ML split cell
+y_train_global = y_train
+X_train_columns_global = list(X_all.columns)  # the columns in the original feature DataFrame
+
+# 2) Run the forecaster
+forecast_xgb_df = forecast_december_2016_xgb(bst, df_processed)
+
+# 3) Load real December 2016 values from solution
+dec_solution = pd.read_csv('solution/t2_solution.csv')
+dec_solution['DateTime'] = pd.to_datetime(dec_solution['DateTime'], format='mixed', errors='coerce')
+dec_solution.set_index('DateTime', inplace=True)
+dec_solution.sort_index(inplace=True)
+
+# 4) Extract Nov 2016 actuals from your main df
+november_actuals = df.loc['2016-11-01':'2016-11-30 23:00:00', 'X']  # or .copy()
+
+# 5) Plot everything
+plt.figure(figsize=(15, 8))
+
+# Plot November actual
+plt.plot(november_actuals.index, november_actuals.values,
+         label='November Actual (Historical)',
+         color='blue', linewidth=2)
+
+# Plot December XGBoost forecast
+plt.plot(forecast_xgb_df.index, forecast_xgb_df['XGB_forecast'],
+         label='December 2016 XGBoost Forecast',
+         color='red', linestyle='--')
+
+# Plot naive confidence intervals
+plt.fill_between(forecast_xgb_df.index,
+                 forecast_xgb_df['lower'],
+                 forecast_xgb_df['upper'],
+                 color='red', alpha=0.2,
+                 label='Naive ±1.96σ Band')
+
+# Plot December real values from solution
+dec_real = dec_solution.loc['2016-12-01':'2016-12-31 23:00:00', 'X']
+plt.plot(dec_real.index, dec_real.values,
+         label='December 2016 Actual (Solution)',
+         color='green', linewidth=2)
+
+plt.title('November 2016 Actuals vs. December 2016 XGBoost Forecast + Real Values')
+plt.xlabel('DateTime')
+plt.ylabel('Traffic Congestion')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+# 6) (Optional) Print out error metrics for December
+common_index = forecast_xgb_df.index.intersection(dec_real.index)
+y_true_dec = dec_real.loc[common_index]
+y_pred_dec = forecast_xgb_df.loc[common_index, 'XGB_forecast']
+
+rmse_dec = np.sqrt(mean_squared_error(y_true_dec, y_pred_dec))
+mae_dec = mean_absolute_error(y_true_dec, y_pred_dec)
+mape_dec = np.mean(np.abs((y_true_dec - y_pred_dec) / y_true_dec)) * 100
+
+print("December Forecast Error Metrics:")
+print(f"  RMSE: {rmse_dec:.4f}")
+print(f"  MAE:  {mae_dec:.4f}")
+print(f"  MAPE: {mape_dec:.2f}%")
