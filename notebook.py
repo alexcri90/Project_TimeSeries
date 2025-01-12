@@ -11,7 +11,6 @@ Original file is located at
 ## Package Installation
 """
 
-# Commented out IPython magic to ensure Python compatibility.
 # %pip install pandas matplotlib numpy seaborn scikit-learn xgboost patsy statsmodels
 # %pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 # %pip install seaborn
@@ -580,50 +579,45 @@ plot_advanced_acf_pacf(both_diff, max_lags=48)
 
 """# ARIMA Simple"""
 
-# Cell 10 - Common Data Preparation
-from tqdm import tqdm  # For progress bars
+# Cell 10 - ARIMA Data Preparation
+from tqdm import tqdm
+import warnings
+warnings.filterwarnings('ignore')
 
-def prepare_data_for_modeling(df, forecast_horizon=744):
+def prepare_arima_data(df):
     """
-    Prepare data for modeling (common across all models)
+    Prepare data for ARIMA modeling, ensuring proper time boundaries
     """
-    print("=== Data Preparation ===")
+    # Explicitly set the training period
+    training_end = '2016-11-30 23:00:00'
 
-    # Remove the last forecast_horizon hours (target forecast period)
-    train_data = df[df['X'].notna()].copy()
+    # Get training data (up to Nov 2016)
+    train_data = df[:'2016-11-30 23:00:00'].copy()
 
-    # Create validation set (last month of available data)
-    validation_size = forecast_horizon
-    train_set = train_data[:-validation_size]
-    val_set = train_data[-validation_size:]
+    print(f"Training data range: {train_data.index.min()} to {train_data.index.max()}")
+    print(f"Training data shape: {train_data.shape}")
 
-    print("\nData Split Summary:")
-    print(f"Training set: {train_set.index.min()} to {train_set.index.max()}")
-    print(f"Validation set: {val_set.index.min()} to {val_set.index.max()}")
-    print(f"Forecast period: {val_set.index.max() + pd.Timedelta(hours=1)} to {df.index.max()}")
-
-    return train_set, val_set
+    return train_data
 
 # Prepare the data
-train_set, val_set = prepare_data_for_modeling(df)
+train_data = prepare_arima_data(df)
 
-# Cell 11 - ARIMA Model Development and Training
+# Cell 11 - ARIMA Model Development
 def develop_arima_model(train_data):
     """
-    Develop ARIMA model based on theoretical analysis
+    Develop ARIMA model using data through November 2016
     """
     print("=== ARIMA Model Development ===")
 
-    # Convert to pandas Series with frequency and handle any preprocessing
+    # Convert to pandas Series with frequency
     y = train_data['X'].astype(float)
-    y.index = pd.date_range(start=y.index[0], periods=len(y), freq='H')
+    y.index = pd.DatetimeIndex(y.index).to_period('H')
 
-    # Define more conservative models
+    # Define model configurations
     models_to_try = [
-        ((1,1,1), (0,1,1,24)),    # Simple model with seasonal MA only
-        ((1,1,1), (1,1,0,24)),    # Simple model with seasonal AR only
-        ((2,1,2), (1,1,1,24)),    # More complex model
-        ((0,1,1), (0,1,1,24))     # Airline model (often works well)
+        ((2,1,2), (1,1,1,24)),  # Our main model
+        ((1,1,1), (0,1,1,24)),  # Simpler alternative
+        ((0,1,1), (0,1,1,24))   # Airline model
     ]
 
     best_aic = float('inf')
@@ -635,26 +629,18 @@ def develop_arima_model(train_data):
     for order, seasonal_order in tqdm(models_to_try, desc="Testing Models"):
         try:
             print(f"\nFitting ARIMA{order}{seasonal_order}")
-
-            # Add start_params to help convergence
             model = ARIMA(y,
                          order=order,
                          seasonal_order=seasonal_order,
                          enforce_stationarity=False,
-                         enforce_invertibility=True)  # Changed to True
+                         enforce_invertibility=True)
 
-            # Use conditional sum of squares to start
             results = model.fit(method='innovations_mle')
             current_aic = results.aic
 
             print(f"AIC: {current_aic:.2f}")
 
-            # Check if the model is reasonable (non-flat forecast)
-            test_forecast = results.forecast(steps=24)
-            forecast_std = test_forecast.std()
-
-            # Only consider model if forecasts show variation
-            if forecast_std > 0.001 and current_aic < best_aic:
+            if current_aic < best_aic:
                 best_aic = current_aic
                 best_model = results
                 best_order = order
@@ -665,17 +651,119 @@ def develop_arima_model(train_data):
             print(f"Error message: {str(e)}")
             continue
 
-    if best_model is None:
-        raise ValueError("No models were successfully fitted!")
-
     print("\nBest Model Configuration:")
     print(f"Order: {best_order}")
     print(f"Seasonal Order: {best_seasonal_order}")
     print(f"AIC: {best_aic}")
-    print("\nModel Summary:")
-    print(best_model.summary())
 
-    return best_model, best_order, best_seasonal_order
+    return best_model
+
+# Train the model
+arima_model = develop_arima_model(train_data)
+print("\nModel Summary:")
+print(arima_model.summary())
+
+# Cell 12 - Generate December 2016 Forecasts
+def generate_december_forecasts(model):
+    """
+    Generate forecasts for December 2016
+    """
+    # Generate forecasts for December 2016 (744 hours)
+    forecast = model.forecast(steps=744)
+
+    # Create forecast dates
+    forecast_dates = pd.date_range(
+        start='2016-12-01',
+        end='2016-12-31 23:00:00',
+        freq='H'
+    )
+
+    # Create DataFrame with forecasts
+    forecast_df = pd.DataFrame({
+        'DateTime': forecast_dates,
+        'ARIMA': np.maximum(forecast, 0)  # Ensure non-negative values
+    })
+
+    return forecast_df
+
+# Generate forecasts
+december_forecasts = generate_december_forecasts(arima_model)
+
+# Cell 13 - Save and Verify Forecasts
+from datetime import datetime
+import os
+
+# Save forecasts
+submission_date = datetime.now().strftime('%Y%m%d')
+submission_filename = f'arima_simple.csv'
+
+if os.path.exists(submission_filename):
+    # Load existing file if it exists
+    submission_df = pd.read_csv(submission_filename)
+    submission_df['ARIMA'] = december_forecasts['ARIMA']
+else:
+    # Create new file
+    submission_df = december_forecasts
+
+submission_df.to_csv(submission_filename, index=False)
+print(f"\nARIMA forecasts saved to {submission_filename}")
+
+# Verify saved file
+verify_df = pd.read_csv(submission_filename)
+print("\nVerification of saved forecasts:")
+print("\nFirst few rows:")
+print(verify_df.head())
+print("\nLast few rows:")
+print(verify_df.tail())
+print("\nShape:", verify_df.shape)
+print("\nColumns:", verify_df.columns.tolist())
+print("\nSummary statistics for ARIMA forecasts:")
+print(verify_df['ARIMA'].describe())
+
+# Cell 14 - Plot December Forecasts with November Actuals
+plt.figure(figsize=(15, 8))
+
+# Plot November actual data
+november_data = df['2016-11-01':'2016-11-30']
+plt.plot(november_data.index, november_data['X'],
+         label='November 2016 (Actual)',
+         color='blue', linewidth=2)
+
+# Plot December forecasts
+plt.plot(december_forecasts['DateTime'], december_forecasts['ARIMA'],
+         label='December 2016 (ARIMA Forecast)',
+         color='red', linestyle='--', linewidth=2)
+
+# If solution data is available, plot it
+try:
+    solution_path = os.path.join('solution', 't2_solution.csv')
+    if os.path.exists(solution_path):
+        solution_data = pd.read_csv(solution_path)
+        solution_data['datetime'] = pd.to_datetime(solution_data['DateTime'])
+        plt.plot(solution_data['datetime'], solution_data['X'],
+                label='December 2016 (Actual)',
+                color='green', linewidth=2)
+
+        # Calculate error metrics
+        dec_rmse = np.sqrt(mean_squared_error(solution_data['X'], december_forecasts['ARIMA']))
+        dec_mae = mean_absolute_error(solution_data['X'], december_forecasts['ARIMA'])
+        dec_mape = np.mean(np.abs((solution_data['X'] - december_forecasts['ARIMA']) / solution_data['X'])) * 100
+
+        metrics_text = f'December Forecast Metrics:\nRMSE: {dec_rmse:.4f}\nMAE: {dec_mae:.4f}\nMAPE: {dec_mape:.2f}%'
+        plt.text(0.02, 0.98, metrics_text,
+                transform=plt.gca().transAxes,
+                verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+except Exception as e:
+    print(f"Note: Could not load solution data: {str(e)}")
+
+plt.title('Traffic Congestion: November 2016 (Actual) vs December 2016 (ARIMA Forecast)')
+plt.xlabel('Date')
+plt.ylabel('Traffic Congestion')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
 
 # Cell 12 - ARIMA Model Diagnostics
 def perform_arima_diagnostics(model):
@@ -1080,452 +1168,297 @@ else:
 
 """## ARIMA Advanced - SARIMAX with Christmas"""
 
-# Cell 19 - More Efficient Seasonal Features
-def create_efficient_features(dates):
-    """
-    Create efficient features for both daily and weekly patterns
-    """
-    features = pd.DataFrame(index=dates)
-
-    # Hour of day (0-23) as cyclical features
-    hours = 24
-    features['hour_sin'] = np.sin(2 * np.pi * dates.hour / hours)
-    features['hour_cos'] = np.cos(2 * np.pi * dates.hour / hours)
-
-    # Day of week (0-6) as cyclical features
-    days = 7
-    features['day_sin'] = np.sin(2 * np.pi * dates.dayofweek / days)
-    features['day_cos'] = np.cos(2 * np.pi * dates.dayofweek / days)
-
-    # Christmas evening indicator
-    christmas_evenings = ((dates.day.isin([25, 26])) &
-                         (dates.hour.isin(range(20, 24))) |
-                         (dates.day.isin([26, 27])) &
-                         (dates.hour.isin(range(0, 6))))
-    features['christmas_evening'] = christmas_evenings.astype(int)
-
-    return features
-
-# Cell 20 - Efficient ARIMA Model
-def develop_efficient_seasonal_arima(train_data):
-    """
-    Develop ARIMA model with daily seasonality and external regressors for weekly patterns
-    """
-    print("=== Efficient Seasonal ARIMA Model Development ===")
-
-    # Prepare the target variable
-    y = train_data['X'].astype(float)
-    y.index = pd.date_range(start=y.index[0], periods=len(y), freq='H')
-
-    # Create efficient features
-    exog_train = create_efficient_features(y.index)
-    print(f"\nIncluded features: {exog_train.columns.tolist()}")
-
-    try:
-        # Fit model with daily seasonality and external regressors
-        model = ARIMA(y,
-                     order=(2, 1, 2),        # Regular ARIMA components
-                     seasonal_order=(1, 1, 1, 24),  # Daily seasonality
-                     exog=exog_train,        # Weekly patterns through cyclical features
-                     enforce_stationarity=False,
-                     enforce_invertibility=True)
-
-        results = model.fit()
-        print("\nModel Summary:")
-        print(results.summary())
-
-        return results
-
-    except Exception as e:
-        print(f"Error fitting model:")
-        print(f"Error message: {str(e)}")
-        raise
-
-# Cell 21 - Efficient Forecast Generation
-def generate_efficient_forecasts(model, train_data, forecast_horizon=744):
-    """
-    Generate forecasts efficiently
-    """
-    # Create forecast dates
-    forecast_start = train_data.index[-1] + pd.Timedelta(hours=1)
-    forecast_dates = pd.date_range(forecast_start, periods=forecast_horizon, freq='H')
-
-    # Create features for forecast period
-    exog_forecast = create_efficient_features(forecast_dates)
-
-    # Generate forecasts
-    forecasts = model.forecast(steps=forecast_horizon, exog=exog_forecast)
-    forecasts = np.maximum(forecasts, 0)  # Ensure non-negative
-
-    # Get confidence intervals
-    conf_int = model.get_forecast(steps=forecast_horizon, exog=exog_forecast).conf_int()
-    conf_int.iloc[:, 0] = np.maximum(conf_int.iloc[:, 0], 0)  # Ensure non-negative lower bound
-
-    return forecasts, conf_int, forecast_dates
-
-# Cell 22 - Run Efficient Pipeline
-print("Starting Efficient ARIMA modeling pipeline...")
-
-try:
-    # Train the model
-    arima_model = develop_efficient_seasonal_arima(train_set)
-
-    # Generate forecasts
-    forecast_mean, forecast_conf, forecast_dates = generate_efficient_forecasts(arima_model, train_set)
-
-    # Create and save forecast DataFrame
-    forecast_df = pd.DataFrame({
-        'datetime': forecast_dates,
-        'ARIMA_forecast': forecast_mean,
-        'ARIMA_lower': forecast_conf.iloc[:, 0],
-        'ARIMA_upper': forecast_conf.iloc[:, 1]
-    })
-    forecast_df.to_csv('arima_forecasts_efficient.csv', index=False)
-
-    print("\nEfficient ARIMA model completed!")
-    print("Forecasts saved to 'arima_forecasts_efficient.csv'")
-
-except Exception as e:
-    print(f"Error in pipeline: {str(e)}")
-    raise
-
-# Cell 23 - Plot Efficient Model Results
-def plot_complete_comparison_efficient(df, forecast_csv, solution_path):
-    """
-    Plot November actuals, December efficient forecasts, and December real values
-    Colors chosen for colorblind visibility:
-    - November actuals: Dark Blue
-    - December forecasts: Orange
-    - December real values: Green
-    - Confidence intervals: Light Orange shading
-    """
-    # Read data files
-    forecasts = pd.read_csv(forecast_csv)
-    forecasts['datetime'] = pd.to_datetime(forecasts['datetime'])
-
-    solution = pd.read_csv(solution_path)
-    solution.index = pd.date_range(start='2016-12-01',
-                                 periods=len(solution),
-                                 freq='H')
-
-    # Get November data
-    november_start = '2016-11-01'
-    november_end = '2016-11-30 23:00:00'
-    november_data = df.loc[november_start:november_end]
-
-    # Create plot with proper size and dpi for better readability
-    plt.figure(figsize=(15, 8), dpi=100)
-
-    # Plot November actual values (Dark Blue)
-    plt.plot(november_data.index, november_data['X'],
-             label='November Actual Values',
-             color='#000080',  # Dark Blue
-             linewidth=2)
-
-    # Plot December forecasts (Orange) - making sure it's in December
-    plt.plot(pd.date_range(start='2016-12-01', periods=len(forecasts), freq='H'),
-             forecasts['ARIMA_forecast'],
-             label='December Forecasts (Efficient ARIMA)',
-             color='#FFA500',  # Orange
-             linewidth=2)
-
-    # Plot December real values (Green)
-    plt.plot(solution.index, solution['X'],
-             label='December Real Values',
-             color='#008000',  # Green
-             linewidth=2,
-             linestyle='--')
-
-    # Add confidence intervals - making sure they're in December
-    plt.fill_between(pd.date_range(start='2016-12-01', periods=len(forecasts), freq='H'),
-                    forecasts['ARIMA_lower'],
-                    forecasts['ARIMA_upper'],
-                    color='#FFA500',  # Orange
-                    alpha=0.2,
-                    label='95% Confidence Interval')
-
-    plt.title('November vs December 2016: Actual, Forecasts, and Real Values')
-    plt.ylabel('Traffic Congestion')
-    plt.xlabel('Date')
-    plt.legend()
-    plt.grid(True)
-
-    # Adjust x-axis to show the entire period clearly
-    plt.xlim(november_data.index[0], solution.index[-1])
-
-    # Print comparison statistics
-    print("\nForecast Error Metrics:")
-    mae = mean_absolute_error(solution['X'], forecasts['ARIMA_forecast'])
-    rmse = np.sqrt(mean_squared_error(solution['X'], forecasts['ARIMA_forecast']))
-    print(f"MAE: {mae:.4f}")
-    print(f"RMSE: {rmse:.4f}")
-
-    plt.show()
-
-# Execute the plot
-solution_path = os.path.join('solution', 't2_solution.csv')
-if os.path.exists('arima_forecasts_efficient.csv') and os.path.exists(solution_path):
-    print("Plotting complete comparison...")
-    plot_complete_comparison_efficient(df, 'arima_forecasts_efficient.csv', solution_path)
-else:
-    print("Missing required files. Please check both forecast and solution files exist.")
-
-# Cell 24 - Create separate plots for forecasts and real values
-def plot_separate_comparisons(df, forecast_csv, solution_path):
-    """
-    Create two separate plots:
-    1. November actuals + December forecasts
-    2. November actuals + December real values
-
-    Colors chosen for colorblind visibility:
-    - November actuals: Dark Blue
-    - December forecasts: Orange
-    - December real values: Green
-    - Confidence intervals: Light Orange shading
-    """
-    # Read data files
-    forecasts = pd.read_csv(forecast_csv)
-    forecasts['datetime'] = pd.to_datetime(forecasts['datetime'])
-
-    solution = pd.read_csv(solution_path)
-    solution.index = pd.date_range(start='2016-12-01',
-                                 periods=len(solution),
-                                 freq='H')
-
-    # Get November data
-    november_start = '2016-11-01'
-    november_end = '2016-11-30 23:00:00'
-    november_data = df.loc[november_start:november_end]
-
-    # Create figure with two subplots
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 12), dpi=100)
-
-    # Plot 1: November + December Forecasts
-    ax1.plot(november_data.index, november_data['X'],
-            label='November Actual Values',
-            color='#000080',  # Dark Blue
-            linewidth=2)
-
-    december_dates = pd.date_range(start='2016-12-01', periods=len(forecasts), freq='H')
-    ax1.plot(december_dates, forecasts['ARIMA_forecast'],
-            label='December Forecasts',
-            color='#FFA500',  # Orange
-            linewidth=2)
-
-    ax1.fill_between(december_dates,
-                    forecasts['ARIMA_lower'],
-                    forecasts['ARIMA_upper'],
-                    color='#FFA500',  # Orange
-                    alpha=0.2,
-                    label='95% Confidence Interval')
-
-    ax1.set_title('November 2016 Actual Values + December 2016 Forecasts')
-    ax1.set_ylabel('Traffic Congestion')
-    ax1.grid(True)
-    ax1.legend()
-
-    # Plot 2: November + December Real Values
-    ax2.plot(november_data.index, november_data['X'],
-            label='November Actual Values',
-            color='#000080',  # Dark Blue
-            linewidth=2)
-
-    ax2.plot(solution.index, solution['X'],
-            label='December Real Values',
-            color='#008000',  # Green
-            linewidth=2)
-
-    ax2.set_title('November 2016 Actual Values + December 2016 Real Values')
-    ax2.set_ylabel('Traffic Congestion')
-    ax2.set_xlabel('Date')
-    ax2.grid(True)
-    ax2.legend()
-
-    # Adjust layout and display
-    plt.tight_layout()
-
-    # Print comparison statistics
-    print("\nForecast Error Metrics:")
-    mae = mean_absolute_error(solution['X'], forecasts['ARIMA_forecast'])
-    rmse = np.sqrt(mean_squared_error(solution['X'], forecasts['ARIMA_forecast']))
-    print(f"MAE: {mae:.4f}")
-    print(f"RMSE: {rmse:.4f}")
-
-    plt.show()
-
-# Execute the plot
-solution_path = os.path.join('solution', 't2_solution.csv')
-if os.path.exists('arima_forecasts_efficient.csv') and os.path.exists(solution_path):
-    print("Plotting separate comparisons...")
-    plot_separate_comparisons(df, 'arima_forecasts_efficient.csv', solution_path)
-else:
-    print("Missing required files. Please check both forecast and solution files exist.")
-
-"""# Analysis of SARIMA Models for Hourly Traffic Data
-
-## 1. Model Structures and Intuition
-
-### Model 1: SARIMA(2, 1, 2)(1, 1, 1)_24
-
-- **Regular ARIMA part:** \((p,d,q) = (2,1,2)\)  
-  - 2 autoregressive terms (\(\text{AR}(2)\))  
-  - 1 regular difference (\(d = 1\))  
-  - 2 moving average terms (\(\text{MA}(2)\))  
-- **Seasonal part (period = 24 hours):** \((P,D,Q) = (1,1,1)\)  
-  - 1 seasonal AR(\(\Phi_1\)) term  
-  - 1 seasonal difference (\(D = 1\))  
-  - 1 seasonal MA(\(\Theta_1\)) term  
-
-This implies the data has a strong daily seasonal structure and also some short-term hour-to-hour correlations.
-
-The model is:
-
-\[
-\phi_2(B)\,\Phi_1(B^{24})\,(1-B)\,(1-B^{24})\,X_t
-\;=\; \theta_2(B)\,\Theta_1(B^{24})\,\varepsilon_t.
-\]
-
----
-
-### Model 2: SARIMAX(2, 1, 2)(1, 1, 1)_24 with External Regressors
-
-- **Same SARIMA structure** as Model 1, **plus** external regressors \(\beta' Z_t\):  
-  - \(Z_t\) includes: \(\text{hour_sin}, \text{hour_cos}, \text{day_sin}, \text{day_cos}, \text{christmas_evening}\).  
-
-The equation (simplified) is:
-
-\[
-\phi_2(B)\,\Phi_1(B^{24})\,(1-B)\,(1-B^{24})\,[\,X_t - \beta' Z_t\,]
-\;=\; \theta_2(B)\,\Theta_1(B^{24})\,\varepsilon_t.
-\]
-
-The goal is to see if adding specific cyclical and holiday effects improves the model fit and forecasts.
-
----
-
-## 2. Comparing Key Fit Statistics
-
-| Model            | Log-Likelihood | AIC         | BIC         |
-|------------------|----------------|-------------|-------------|
-| **Model 1**      | 37587.551      | -75161.101  | -75107.337  |
-| **Model 2**      | 37345.423      | -74666.846  | -74574.679  |
-
-- **Model 1** has a higher log-likelihood (37587 vs. 37345).  
-- **Model 1** also has lower (better) AIC and BIC than Model 2.
-
-By standard information criteria, **Model 1** outperforms **Model 2**, even though Model 2 includes additional regressors.
-
----
-
-## 3. Parameter Estimates and Significance
-
-### 3.1. Model 1 Parameter Estimates
-
-- **ar.L1:** 1.0280 (p < 0.0001)  
-- **ar.L2:** -0.2997 (p < 0.0001)  
-- **ma.L1:** -1.2680 (p < 0.0001)  
-- **ma.L2:** 0.2727 (p < 0.0001)  
-- **ar.S.L24:** 0.2885 (p < 0.0001)  
-- **ma.S.L24:** -0.9842 (p < 0.0001)  
-- **\(\sigma^2\):** 0.0005  
-
-**Implications:**
-
-1. **Nonseasonal AR(1) is slightly above 1**: Could indicate a high level of persistence, but combined with differencing and other terms, it may still be stationary in practice.  
-2. **Nonseasonal AR(2) is negative**: Suggests hour-to-hour dynamics might reverse after 2 lags.  
-3. **Large negative MA(1)**: Implies strong “shock” corrections from one hour to the next.  
-4. **Seasonal terms** show a strong daily pattern (24-hour). The large negative seasonal MA suggests strong correction day-to-day at the same hour.  
-5. **Very small \(\sigma^2\)** on the differenced scale indicates a tight fit.
-
----
-
-### 3.2. Model 2 Parameter Estimates
-
-- **External Regressors**:  
-  - **hour_sin:** ~\(-3.36 \times 10^{-9}\), p=0.96 (not significant)  
-  - **hour_cos:** ~\(1.03 \times 10^{-9}\), p=0.98 (not significant)  
-  - **day_sin:** 0.0144, p<0.0001 (significant)  
-  - **day_cos:** 0.0007, p=0.49 (not significant)  
-  - **christmas_evening:** 0.0236, p<0.0001 (significant)  
-
-- **ARMA terms**:  
-  - **ar.L1:** 0.0284 (p=0.82, not significant)  
-  - **ar.L2:** 0.3529 (p<0.0001, significant)  
-  - **ma.L1:** -0.3691 (p=0.003, significant)  
-  - **ma.L2:** -0.6173 (p<0.0001, significant)  
-  - **ar.S.L24:** 0.2995 (p<0.0001, significant)  
-  - **ma.S.L24:** -0.9420 (p<0.0001, significant)  
-
-- **\(\sigma^2\):** 0.0006  
-
-**Implications:**
-
-1. **hour_sin/cos are effectively zero** and not significant, suggesting the 24-hour seasonal ARIMA structure itself captures the diurnal pattern.  
-2. **day_sin is significant**, indicating a weekly cycle not fully captured by the 24-hour differencing.  
-3. **day_cos is not significant**. Possibly day_sin alone is enough, or there’s collinearity.  
-4. **christmas_evening is significant**, indicating a unique effect around Christmas.  
-5. **AR(1) is no longer significant** once external regressors are added.  
-6. The overall \(\sigma^2\) is slightly larger than in Model 1, and AIC/BIC are worse.
-
----
-
-## 4. Residual Diagnostics
-
-- **Ljung-Box (L1) (Q):**  
-  - Model 1: 1.22 (p=0.27)  
-  - Model 2: 105.71 (p=0.00)  
-
-  Model 2’s residuals show significant autocorrelation at lag 1, whereas Model 1’s residuals do not.
-
-- **Jarque-Bera (JB):** Extremely large for both, indicating **non-normality** in residuals. This is common in traffic data.  
-- **Heteroskedasticity (H) tests:** Both show p-values suggesting some non-constant variance in residuals (again, common in traffic contexts).
-
----
-
-## 5. Overall Implications & Next Steps
-
-1. **Model 1 (Pure SARIMA) Outperforms Model 2 (SARIMAX)**  
-   - Lower AIC/BIC and higher log-likelihood indicate a better fit.  
-   - The added regressors (especially hour_sin, hour_cos) don’t help much beyond what the 24-hour seasonal differencing already provides.
-
-2. **Significant Regressors** in Model 2 (day_sin, christmas_evening) do show real effects, but the overall fit doesn’t improve enough to beat Model 1 in penalized-likelihood terms.
-
-3. **Potential Over-Differencing / High Persistence**  
-   - AR(1) near or above 1 can happen; ensure stationarity conditions hold by checking inverse roots.
-
-4. **Residual Diagnostics**  
-   - Both models deviate from normality and may have heteroskedasticity. For best forecast intervals, consider alternative error structures or transformations.
-
-5. **Choosing the “Best” Model**  
-   - If you want the best numeric fit and forecasts, **Model 1** appears superior.  
-   - If interpretability about weekly or holiday effects is crucial, you could still consider a SARIMAX approach (perhaps removing hour_sin/hour_cos and optimizing further).
-
-6. **Next Steps**  
-   - Try a model that keeps “day_sin” and “christmas_evening” but omits the unhelpful hour_sin/hour_cos terms.  
-   - Consider multi-seasonal approaches (e.g., 24-hour + 168-hour for weekly seasonality), or day-of-week dummies.  
-   - Consider variance-stabilizing transformations if the raw residuals show heavy skew/kurtosis.
-
----
-
-## 6. Summary
-
-- **Model 1**: By AIC/BIC, this is the better-fitting model for hourly traffic. It captures strong daily seasonality and short-term AR/MA components.  
-- **Model 2**: Although it includes meaningful regressors (especially day-of-week and holiday effects), it does not outperform Model 1 in overall fit. The 24-hour seasonal differencing/ARMA already explains much of the diurnal pattern, leaving the cyclical hour regressors insignificant.  
-- **Residuals**: Both models have non-normal, possibly heteroskedastic residuals, which is not unusual in traffic data.  
-
-In practice, **Model 1** might be the simpler, better choice for forecasting hourly traffic, while **Model 2** has added interpretability regarding holiday and weekly patterns but does not necessarily improve forecast accuracy.
-
-# Model 3: SARIMAX(2,1,2)(1,1,1)_24 more efficient
-"""
+# # Cell 19 - More Efficient Seasonal Features
+# def create_efficient_features(dates):
+#     """
+#     Create efficient features for both daily and weekly patterns
+#     """
+#     features = pd.DataFrame(index=dates)
+
+#     # Hour of day (0-23) as cyclical features
+#     hours = 24
+#     features['hour_sin'] = np.sin(2 * np.pi * dates.hour / hours)
+#     features['hour_cos'] = np.cos(2 * np.pi * dates.hour / hours)
+
+#     # Day of week (0-6) as cyclical features
+#     days = 7
+#     features['day_sin'] = np.sin(2 * np.pi * dates.dayofweek / days)
+#     features['day_cos'] = np.cos(2 * np.pi * dates.dayofweek / days)
+
+#     # Christmas evening indicator
+#     christmas_evenings = ((dates.day.isin([25, 26])) &
+#                          (dates.hour.isin(range(20, 24))) |
+#                          (dates.day.isin([26, 27])) &
+#                          (dates.hour.isin(range(0, 6))))
+#     features['christmas_evening'] = christmas_evenings.astype(int)
+
+#     return features
+
+# # Cell 20 - Efficient ARIMA Model
+# def develop_efficient_seasonal_arima(train_data):
+#     """
+#     Develop ARIMA model with daily seasonality and external regressors for weekly patterns
+#     """
+#     print("=== Efficient Seasonal ARIMA Model Development ===")
+
+#     # Prepare the target variable
+#     y = train_data['X'].astype(float)
+#     y.index = pd.date_range(start=y.index[0], periods=len(y), freq='H')
+
+#     # Create efficient features
+#     exog_train = create_efficient_features(y.index)
+#     print(f"\nIncluded features: {exog_train.columns.tolist()}")
+
+#     try:
+#         # Fit model with daily seasonality and external regressors
+#         model = ARIMA(y,
+#                      order=(2, 1, 2),        # Regular ARIMA components
+#                      seasonal_order=(1, 1, 1, 24),  # Daily seasonality
+#                      exog=exog_train,        # Weekly patterns through cyclical features
+#                      enforce_stationarity=False,
+#                      enforce_invertibility=True)
+
+#         results = model.fit()
+#         print("\nModel Summary:")
+#         print(results.summary())
+
+#         return results
+
+#     except Exception as e:
+#         print(f"Error fitting model:")
+#         print(f"Error message: {str(e)}")
+#         raise
+
+# # Cell 21 - Efficient Forecast Generation
+# def generate_efficient_forecasts(model, train_data, forecast_horizon=744):
+#     """
+#     Generate forecasts efficiently
+#     """
+#     # Create forecast dates
+#     forecast_start = train_data.index[-1] + pd.Timedelta(hours=1)
+#     forecast_dates = pd.date_range(forecast_start, periods=forecast_horizon, freq='H')
+
+#     # Create features for forecast period
+#     exog_forecast = create_efficient_features(forecast_dates)
+
+#     # Generate forecasts
+#     forecasts = model.forecast(steps=forecast_horizon, exog=exog_forecast)
+#     forecasts = np.maximum(forecasts, 0)  # Ensure non-negative
+
+#     # Get confidence intervals
+#     conf_int = model.get_forecast(steps=forecast_horizon, exog=exog_forecast).conf_int()
+#     conf_int.iloc[:, 0] = np.maximum(conf_int.iloc[:, 0], 0)  # Ensure non-negative lower bound
+
+#     return forecasts, conf_int, forecast_dates
+
+# # Cell 22 - Run Efficient Pipeline
+# print("Starting Efficient ARIMA modeling pipeline...")
+
+# try:
+#     # Train the model
+#     arima_model = develop_efficient_seasonal_arima(train_set)
+
+#     # Generate forecasts
+#     forecast_mean, forecast_conf, forecast_dates = generate_efficient_forecasts(arima_model, train_set)
+
+#     # Create and save forecast DataFrame
+#     forecast_df = pd.DataFrame({
+#         'datetime': forecast_dates,
+#         'ARIMA_forecast': forecast_mean,
+#         'ARIMA_lower': forecast_conf.iloc[:, 0],
+#         'ARIMA_upper': forecast_conf.iloc[:, 1]
+#     })
+#     forecast_df.to_csv('arima_forecasts_efficient.csv', index=False)
+
+#     print("\nEfficient ARIMA model completed!")
+#     print("Forecasts saved to 'arima_forecasts_efficient.csv'")
+
+# except Exception as e:
+#     print(f"Error in pipeline: {str(e)}")
+#     raise
+
+# # Cell 23 - Plot Efficient Model Results
+# def plot_complete_comparison_efficient(df, forecast_csv, solution_path):
+#     """
+#     Plot November actuals, December efficient forecasts, and December real values
+#     Colors chosen for colorblind visibility:
+#     - November actuals: Dark Blue
+#     - December forecasts: Orange
+#     - December real values: Green
+#     - Confidence intervals: Light Orange shading
+#     """
+#     # Read data files
+#     forecasts = pd.read_csv(forecast_csv)
+#     forecasts['datetime'] = pd.to_datetime(forecasts['datetime'])
+
+#     solution = pd.read_csv(solution_path)
+#     solution.index = pd.date_range(start='2016-12-01',
+#                                  periods=len(solution),
+#                                  freq='H')
+
+#     # Get November data
+#     november_start = '2016-11-01'
+#     november_end = '2016-11-30 23:00:00'
+#     november_data = df.loc[november_start:november_end]
+
+#     # Create plot with proper size and dpi for better readability
+#     plt.figure(figsize=(15, 8), dpi=100)
+
+#     # Plot November actual values (Dark Blue)
+#     plt.plot(november_data.index, november_data['X'],
+#              label='November Actual Values',
+#              color='#000080',  # Dark Blue
+#              linewidth=2)
+
+#     # Plot December forecasts (Orange) - making sure it's in December
+#     plt.plot(pd.date_range(start='2016-12-01', periods=len(forecasts), freq='H'),
+#              forecasts['ARIMA_forecast'],
+#              label='December Forecasts (Efficient ARIMA)',
+#              color='#FFA500',  # Orange
+#              linewidth=2)
+
+#     # Plot December real values (Green)
+#     plt.plot(solution.index, solution['X'],
+#              label='December Real Values',
+#              color='#008000',  # Green
+#              linewidth=2,
+#              linestyle='--')
+
+#     # Add confidence intervals - making sure they're in December
+#     plt.fill_between(pd.date_range(start='2016-12-01', periods=len(forecasts), freq='H'),
+#                     forecasts['ARIMA_lower'],
+#                     forecasts['ARIMA_upper'],
+#                     color='#FFA500',  # Orange
+#                     alpha=0.2,
+#                     label='95% Confidence Interval')
+
+#     plt.title('November vs December 2016: Actual, Forecasts, and Real Values')
+#     plt.ylabel('Traffic Congestion')
+#     plt.xlabel('Date')
+#     plt.legend()
+#     plt.grid(True)
+
+#     # Adjust x-axis to show the entire period clearly
+#     plt.xlim(november_data.index[0], solution.index[-1])
+
+#     # Print comparison statistics
+#     print("\nForecast Error Metrics:")
+#     mae = mean_absolute_error(solution['X'], forecasts['ARIMA_forecast'])
+#     rmse = np.sqrt(mean_squared_error(solution['X'], forecasts['ARIMA_forecast']))
+#     print(f"MAE: {mae:.4f}")
+#     print(f"RMSE: {rmse:.4f}")
+
+#     plt.show()
+
+# # Execute the plot
+# solution_path = os.path.join('solution', 't2_solution.csv')
+# if os.path.exists('arima_forecasts_efficient.csv') and os.path.exists(solution_path):
+#     print("Plotting complete comparison...")
+#     plot_complete_comparison_efficient(df, 'arima_forecasts_efficient.csv', solution_path)
+# else:
+#     print("Missing required files. Please check both forecast and solution files exist.")
+
+# # Cell 24 - Create separate plots for forecasts and real values
+# def plot_separate_comparisons(df, forecast_csv, solution_path):
+#     """
+#     Create two separate plots:
+#     1. November actuals + December forecasts
+#     2. November actuals + December real values
+
+#     Colors chosen for colorblind visibility:
+#     - November actuals: Dark Blue
+#     - December forecasts: Orange
+#     - December real values: Green
+#     - Confidence intervals: Light Orange shading
+#     """
+#     # Read data files
+#     forecasts = pd.read_csv(forecast_csv)
+#     forecasts['datetime'] = pd.to_datetime(forecasts['datetime'])
+
+#     solution = pd.read_csv(solution_path)
+#     solution.index = pd.date_range(start='2016-12-01',
+#                                  periods=len(solution),
+#                                  freq='H')
+
+#     # Get November data
+#     november_start = '2016-11-01'
+#     november_end = '2016-11-30 23:00:00'
+#     november_data = df.loc[november_start:november_end]
+
+#     # Create figure with two subplots
+#     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 12), dpi=100)
+
+#     # Plot 1: November + December Forecasts
+#     ax1.plot(november_data.index, november_data['X'],
+#             label='November Actual Values',
+#             color='#000080',  # Dark Blue
+#             linewidth=2)
+
+#     december_dates = pd.date_range(start='2016-12-01', periods=len(forecasts), freq='H')
+#     ax1.plot(december_dates, forecasts['ARIMA_forecast'],
+#             label='December Forecasts',
+#             color='#FFA500',  # Orange
+#             linewidth=2)
+
+#     ax1.fill_between(december_dates,
+#                     forecasts['ARIMA_lower'],
+#                     forecasts['ARIMA_upper'],
+#                     color='#FFA500',  # Orange
+#                     alpha=0.2,
+#                     label='95% Confidence Interval')
+
+#     ax1.set_title('November 2016 Actual Values + December 2016 Forecasts')
+#     ax1.set_ylabel('Traffic Congestion')
+#     ax1.grid(True)
+#     ax1.legend()
+
+#     # Plot 2: November + December Real Values
+#     ax2.plot(november_data.index, november_data['X'],
+#             label='November Actual Values',
+#             color='#000080',  # Dark Blue
+#             linewidth=2)
+
+#     ax2.plot(solution.index, solution['X'],
+#             label='December Real Values',
+#             color='#008000',  # Green
+#             linewidth=2)
+
+#     ax2.set_title('November 2016 Actual Values + December 2016 Real Values')
+#     ax2.set_ylabel('Traffic Congestion')
+#     ax2.set_xlabel('Date')
+#     ax2.grid(True)
+#     ax2.legend()
+
+#     # Adjust layout and display
+#     plt.tight_layout()
+
+#     # Print comparison statistics
+#     print("\nForecast Error Metrics:")
+#     mae = mean_absolute_error(solution['X'], forecasts['ARIMA_forecast'])
+#     rmse = np.sqrt(mean_squared_error(solution['X'], forecasts['ARIMA_forecast']))
+#     print(f"MAE: {mae:.4f}")
+#     print(f"RMSE: {rmse:.4f}")
+
+#     plt.show()
+
+# # Execute the plot
+# solution_path = os.path.join('solution', 't2_solution.csv')
+# if os.path.exists('arima_forecasts_efficient.csv') and os.path.exists(solution_path):
+#     print("Plotting separate comparisons...")
+#     plot_separate_comparisons(df, 'arima_forecasts_efficient.csv', solution_path)
+# else:
+#     print("Missing required files. Please check both forecast and solution files exist.")
+
+"""# Model 3: SARIMAX(2,1,2)(1,1,1)_24 more efficient"""
 
 # Cell 25 - New Feature Creation Function
 def create_refined_features(dates):
     """
-    Create features: only day_cos and christmas_evening
+    Create features: only day_sin and christmas_evening
     """
     features = pd.DataFrame(index=dates)
 
-    # Day of week (0-6) as cosine feature only
+    # Day of week (0-6) as sine feature only
     days = 7
     features['day_sin'] = np.sin(2 * np.pi * dates.dayofweek / days)
 
@@ -1951,20 +1884,44 @@ def create_phase_adjusted_features(dates):
 
     return features
 
-# Cell 37 - Phase-Adjusted SARIMAX Model
-def develop_phase_adjusted_sarimax(train_data):
+# Cell 37 - Phase-Adjusted Weekly Features with Christmas Effect
+def create_final_features(dates):
     """
-    Develop SARIMAX model with phase-adjusted day_sin regressor
+    Create features for SARIMAX model with phase-adjusted day_sin and christmas_evening
     """
-    print("=== Phase-Adjusted SARIMAX Model Development ===")
+    features = pd.DataFrame(index=dates)
 
-    # Prepare the target variable
+    # Day of week (0-6) with phase adjustment for Wednesday peak
+    days = 7
+    phase_shift = 2 * np.pi * 2/7  # 2 days shift for Wednesday peak
+    features['day_sin'] = np.sin(2 * np.pi * dates.dayofweek/days + phase_shift)
+
+    # Christmas evening indicator
+    christmas_evenings = ((dates.day.isin([25, 26])) &
+                         (dates.hour.isin(range(20, 24))) |
+                         (dates.day.isin([26, 27])) &
+                         (dates.hour.isin(range(0, 6))))
+    features['christmas_evening'] = christmas_evenings.astype(int)
+
+    return features
+
+# Cell 38 - Final SARIMAX Model Development
+def develop_final_sarimax(df):
+    """
+    Develop SARIMAX model using data through November 2016
+    """
+    print("=== Final SARIMAX Model Development ===")
+
+    # Get training data (up to Nov 2016)
+    train_data = df[:'2016-11-30 23:00:00'].copy()
+    print(f"Training period: {train_data.index.min()} to {train_data.index.max()}")
+
+    # Prepare target variable
     y = train_data['X'].astype(float)
-    y.index = pd.date_range(start=y.index[0], periods=len(y), freq='H')
 
-    # Create phase-adjusted features
-    exog_train = create_phase_adjusted_features(y.index)
-    print(f"\nIncluded features: {exog_train.columns.tolist()}")
+    # Create features for training period
+    exog_train = create_final_features(train_data.index)
+    print(f"\nFeatures included: {exog_train.columns.tolist()}")
 
     try:
         # Fit model
@@ -1979,163 +1936,149 @@ def develop_phase_adjusted_sarimax(train_data):
         print("\nModel Summary:")
         print(results.summary())
 
-        return results, exog_train
+        return results
 
     except Exception as e:
-        print(f"Error fitting model:")
-        print(f"Error message: {str(e)}")
+        print(f"Error fitting model: {str(e)}")
         raise
 
-# Cell 38 - Generate Phase-Adjusted Forecasts
-def generate_phase_adjusted_forecasts(model, train_data, forecast_horizon=744):
+# Cell 39 - Generate December 2016 SARIMAX Forecasts
+def generate_sarimax_forecasts(model):
     """
-    Generate forecasts using the phase-adjusted model
+    Generate SARIMAX forecasts for December 2016
     """
     # Create forecast dates
-    forecast_start = train_data.index[-1] + pd.Timedelta(hours=1)
-    forecast_dates = pd.date_range(forecast_start, periods=forecast_horizon, freq='H')
-
-    # Create phase-adjusted features for forecast period
-    exog_forecast = create_phase_adjusted_features(forecast_dates)
-
-    # Generate forecasts
-    forecasts = model.forecast(steps=forecast_horizon, exog=exog_forecast)
-    forecasts = np.maximum(forecasts, 0)  # Ensure non-negative
-
-    # Get confidence intervals
-    conf_int = model.get_forecast(steps=forecast_horizon, exog=exog_forecast).conf_int()
-    conf_int.iloc[:, 0] = np.maximum(conf_int.iloc[:, 0], 0)  # Ensure non-negative lower bound
-
-    return forecasts, conf_int, forecast_dates
-
-# Cell 39 - Run Phase-Adjusted Pipeline
-print("Starting Phase-Adjusted SARIMAX modeling pipeline...")
-
-try:
-    # Train the model
-    phase_adj_model, phase_adj_features = develop_phase_adjusted_sarimax(train_set)
-
-    # Generate forecasts
-    forecast_mean, forecast_conf, forecast_dates = generate_phase_adjusted_forecasts(
-        phase_adj_model,
-        train_set,
-        forecast_horizon=744
-    )
-
-    # Save forecasts
-    forecast_df = pd.DataFrame({
-        'datetime': forecast_dates,
-        'ARIMA_forecast': forecast_mean,
-        'ARIMA_lower': forecast_conf.iloc[:, 0],
-        'ARIMA_upper': forecast_conf.iloc[:, 1]
-    })
-    forecast_df.to_csv('arima_forecasts_phase_adjusted.csv', index=False)
-
-    print("\nPhase-Adjusted SARIMAX model completed!")
-    print("Forecasts saved to 'arima_forecasts_phase_adjusted.csv'")
-
-except Exception as e:
-    print(f"Error in pipeline: {str(e)}")
-    raise
-
-# Cell 40 - Plot Phase-Adjusted Results
-def plot_phase_adjusted_results(df, forecast_csv, solution_path):
-    """
-    Plot results of the phase-adjusted model
-    """
-    # Read data files
-    forecasts = pd.read_csv(forecast_csv)
-    forecasts['datetime'] = pd.to_datetime(forecasts['datetime'])
-
-    solution = pd.read_csv(solution_path)
-    solution.index = pd.date_range(start='2016-12-01',
-                                 periods=len(solution),
+    forecast_dates = pd.date_range(start='2016-12-01',
+                                 end='2016-12-31 23:00:00',
                                  freq='H')
 
+    # Create features for forecast period
+    exog_forecast = create_final_features(forecast_dates)
+
+    # Generate forecasts
+    forecasts = model.forecast(steps=744, exog=exog_forecast)
+    forecasts = np.maximum(forecasts, 0)  # Ensure non-negative
+
+    # Create forecast DataFrame
+    forecast_df = pd.DataFrame({
+        'DateTime': forecast_dates,
+        'SARIMAX': forecasts
+    })
+
+    return forecast_df
+
+# Run SARIMAX pipeline
+print("Starting Final SARIMAX pipeline...")
+
+try:
+    # Train model
+    sarimax_model = develop_final_sarimax(df)
+
+    # Generate forecasts
+    december_forecasts = generate_sarimax_forecasts(sarimax_model)
+
+    # Save forecasts
+    december_forecasts.to_csv('sarimax_forecasts.csv', index=False)
+    print("\nForecasts saved to 'sarimax_forecasts.csv'")
+
+    # Verify saved forecasts
+    verify_df = pd.read_csv('sarimax_forecasts.csv')
+    print("\nVerification of saved forecasts:")
+    print(verify_df.head())
+    print("\nShape:", verify_df.shape)
+    print("\nDescriptive statistics:")
+    print(verify_df['SARIMAX'].describe())
+
+except Exception as e:
+    print(f"Error in SARIMAX pipeline: {str(e)}")
+    raise
+
+# Cell 40 - Plot SARIMAX Results
+def plot_sarimax_results(df, forecast_csv, solution_path):
+    """
+    Plot November actuals, December SARIMAX forecasts, and December real values
+    """
+    # Read forecasts
+    forecasts = pd.read_csv(forecast_csv)
+    forecasts['DateTime'] = pd.to_datetime(forecasts['DateTime'])
+
+    # Read solution
+    solution = pd.read_csv(solution_path)
+    solution['datetime'] = pd.to_datetime(solution['DateTime'])
+
     # Get November data
-    november_data = df.loc['2016-11-01':'2016-11-30 23:00:00']
+    november_data = df['2016-11-01':'2016-11-30 23:00:00']
 
-    # Create figure
-    plt.figure(figsize=(15, 10))
+    # Create plot
+    plt.figure(figsize=(15, 8))
 
-    # Plot data
+    # Plot November actual values
     plt.plot(november_data.index, november_data['X'],
-             label='November Actual Values',
-             color='#000080',
+             label='November 2016 (Actual)',
+             color='#000080',  # Dark Blue
              linewidth=2)
 
-    plt.plot(solution.index, solution['X'],
-             label='December Real Values',
-             color='#008000',
+    # Plot December forecasts
+    plt.plot(forecasts['DateTime'], forecasts['SARIMAX'],
+             label='December 2016 (SARIMAX Forecast)',
+             color='#FFA500',  # Orange
              linewidth=2,
              linestyle='--')
 
-    plt.plot(pd.date_range(start='2016-12-01', periods=len(forecasts), freq='H'),
-             forecasts['ARIMA_forecast'],
-             label='December Forecasts (Phase-Adjusted)',
-             color='#FFA500',
+    # Plot December actual values
+    plt.plot(solution['datetime'], solution['X'],
+             label='December 2016 (Actual)',
+             color='#008000',  # Green
              linewidth=2)
 
-    # Add confidence intervals
-    plt.fill_between(pd.date_range(start='2016-12-01', periods=len(forecasts), freq='H'),
-                    forecasts['ARIMA_lower'],
-                    forecasts['ARIMA_upper'],
-                    color='#FFA500',
-                    alpha=0.2,
-                    label='95% Confidence Interval')
-
-    plt.title('Phase-Adjusted SARIMAX Model: Forecasts vs Actual Values')
+    plt.title('SARIMAX Model: November Actuals vs December Forecast and Actual Values')
     plt.ylabel('Traffic Congestion')
     plt.xlabel('Date')
     plt.legend()
     plt.grid(True)
 
-    # Print error metrics
-    print("\nForecast Error Metrics:")
-    mae = mean_absolute_error(solution['X'], forecasts['ARIMA_forecast'])
-    rmse = np.sqrt(mean_squared_error(solution['X'], forecasts['ARIMA_forecast']))
-    mape = np.mean(np.abs((solution['X'] - forecasts['ARIMA_forecast']) / solution['X'])) * 100
-    print(f"MAE: {mae:.4f}")
-    print(f"RMSE: {rmse:.4f}")
-    print(f"MAPE: {mape:.2f}%")
+    # Add error metrics
+    rmse = np.sqrt(mean_squared_error(solution['X'], forecasts['SARIMAX']))
+    mae = mean_absolute_error(solution['X'], forecasts['SARIMAX'])
+    mape = np.mean(np.abs((solution['X'] - forecasts['SARIMAX']) / solution['X'])) * 100
 
+    metrics_text = f'December Forecast Metrics:\nRMSE: {rmse:.4f}\nMAE: {mae:.4f}\nMAPE: {mape:.2f}%'
+    plt.text(0.02, 0.98, metrics_text,
+             transform=plt.gca().transAxes,
+             verticalalignment='top',
+             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+    plt.tight_layout()
     plt.show()
 
-# Execute the plot
-solution_path = os.path.join('solution', 't2_solution.csv')
-if os.path.exists('arima_forecasts_phase_adjusted.csv') and os.path.exists(solution_path):
-    print("Plotting phase-adjusted model results...")
-    plot_phase_adjusted_results(df, 'arima_forecasts_phase_adjusted.csv', solution_path)
+    return rmse, mae, mape
+
+# Execute the plot if files exist
+if os.path.exists('sarimax_forecasts.csv') and os.path.exists(os.path.join('solution', 't2_solution.csv')):
+    print("Plotting SARIMAX results...")
+    rmse, mae, mape = plot_sarimax_results(df, 'sarimax_forecasts.csv', os.path.join('solution', 't2_solution.csv'))
 else:
     print("Missing required files. Please check both forecast and solution files exist.")
 
 """# UCM"""
 
-# Cell 41 - UCM Setup and Imports
+# Cell 41 - UCM Setup and Features
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
 from statsmodels.tsa.statespace.structural import UnobservedComponents
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 import warnings
 warnings.filterwarnings('ignore')
 
-# Plot settings
-plt.style.use('default')
-sns.set_style("whitegrid")
-plt.rcParams['figure.figsize'] = [12, 8]
-plt.rcParams['figure.dpi'] = 100
-
 def create_ucm_features(dates):
     """
-    Create features for UCM models
+    Create features for UCM models: weekly pattern and christmas effect
     """
     features = pd.DataFrame(index=dates)
 
-    # Weekly pattern (0-6) as sine wave with proper phase
+    # Weekly pattern with Wednesday peak
     days = 7
-    phase_shift = 2 * np.pi * 2/7  # Peak on Wednesday
+    phase_shift = 2 * np.pi * 2/7
     features['day_sin'] = np.sin(2 * np.pi * dates.dayofweek/days + phase_shift)
 
     # Christmas evening indicator
@@ -2147,133 +2090,153 @@ def create_ucm_features(dates):
 
     return features
 
-# Cell 42 - Base UCM Model with Constrained Forecasting
-def forecast_ucm(model, steps=744):
+# Cell 42 - UCM Model Development
+def develop_ucm_model(df):
     """
-    Generate forecasts from UCM model with constrained uncertainty
+    Develop UCM model using data through November 2016
     """
-    # Get the basic forecast
-    forecast = model.forecast(steps=steps)
+    print("=== UCM Model Development ===")
 
-    # Calculate constrained prediction intervals
-    sigma2_irregular = model.params['sigma2.irregular']
-    sigma2_level = model.params['sigma2.level']
-    sigma2_seasonal = model.params['sigma2.seasonal']
+    # Get training data up to November 2016
+    train_data = df[:'2016-11-30 23:00:00'].copy()
+    print(f"Training period: {train_data.index.min()} to {train_data.index.max()}")
 
-    # Calculate base variance for one period (24 hours)
-    base_var = sigma2_irregular + sigma2_level + sigma2_seasonal
+    # Create features for training period
+    exog = create_ucm_features(train_data.index)
 
-    # Calculate variance for each forecast step
-    # Constrain growth to maximum of 3 seasonal cycles
-    forecast_var = np.zeros(steps)
-    for i in range(steps):
-        # Calculate how many complete seasonal cycles we're forecasting
-        cycles = min(i / 24, 3)  # Cap at 3 cycles
-        forecast_var[i] = base_var * (1 + cycles * 0.1)  # 10% increase per cycle
+    # Specify and fit UCM
+    model = UnobservedComponents(
+        train_data['X'],
+        exog=exog,
+        level='local level',
+        seasonal=24,          # Daily seasonality
+        stochastic_seasonal=True,
+        irregular=True
+    )
 
-    # Create confidence intervals
-    z_score = 1.96  # 95% confidence
-    ci_lower = forecast - z_score * np.sqrt(forecast_var)
-    ci_upper = forecast + z_score * np.sqrt(forecast_var)
+    results = model.fit()
+    print("\nModel Summary:")
+    print(results.summary())
 
-    # Ensure non-negative values
-    ci_lower = np.maximum(ci_lower, 0)
+    return results
 
-    return forecast, pd.DataFrame({
-        'lower': ci_lower,
-        'upper': ci_upper
-    })
-
-# Cell 43 - Enhanced UCM Model with Better Forecasting
-def forecast_enhanced_ucm(model, train_data, forecast_dates, steps=744):
+# Cell 43 - Generate December 2016 UCM Forecasts
+def generate_ucm_forecasts(model):
     """
-    Generate forecasts from enhanced UCM model with constrained uncertainty
-    Includes weekly seasonality via day_sin
+    Generate UCM forecasts for December 2016
     """
-    # Create features for forecast period
-    exog_forecast = create_ucm_features(forecast_dates)['day_sin']
+    # Create forecast dates
+    forecast_dates = pd.date_range(
+        start='2016-12-01',
+        end='2016-12-31 23:00:00',
+        freq='H'
+    )
 
-    # Get the basic forecast
-    forecast = model.forecast(steps=steps, exog=exog_forecast)
-
-    # Calculate constrained prediction intervals
-    sigma2_irregular = model.params['sigma2.irregular']
-    sigma2_level = model.params['sigma2.level']
-    sigma2_seasonal = model.params['sigma2.seasonal']
-
-    # Calculate base variance for one period (24 hours)
-    base_var = sigma2_irregular + sigma2_level + sigma2_seasonal
-
-    # Calculate variance for each forecast step
-    forecast_var = np.zeros(steps)
-    for i in range(steps):
-        # Calculate how many complete seasonal cycles we're forecasting
-        cycles = min(i / 24, 3)  # Cap at 3 cycles
-        # Add a small additional uncertainty for weekly pattern
-        weekly_uncertainty = 0.05 * (i / (24 * 7))  # 5% increase per week
-        forecast_var[i] = base_var * (1 + cycles * 0.1 + min(weekly_uncertainty, 0.15))
-
-    # Create confidence intervals
-    z_score = 1.96  # 95% confidence
-    ci_lower = forecast - z_score * np.sqrt(forecast_var)
-    ci_upper = forecast + z_score * np.sqrt(forecast_var)
-
-    # Ensure non-negative values
-    ci_lower = np.maximum(ci_lower, 0)
-
-    return forecast, pd.DataFrame({
-        'lower': ci_lower,
-        'upper': ci_upper
-    })
-
-# Cell 44 - Final UCM Model with Better Forecasting
-def forecast_final_ucm(model, train_data, forecast_dates, steps=744):
-    """
-    Generate forecasts from final UCM model with constrained uncertainty
-    Includes weekly seasonality and Christmas effect
-    """
     # Create features for forecast period
     exog_forecast = create_ucm_features(forecast_dates)
 
-    # Get the basic forecast
-    forecast = model.forecast(steps=steps, exog=exog_forecast)
+    # Generate forecasts
+    forecasts = model.forecast(steps=744, exog=exog_forecast)
+    forecasts = np.maximum(forecasts, 0)  # Ensure non-negative
 
-    # Calculate constrained prediction intervals
-    sigma2_irregular = model.params['sigma2.irregular']
-    sigma2_level = model.params['sigma2.level']
-    sigma2_seasonal = model.params['sigma2.seasonal']
-
-    # Calculate base variance for one period (24 hours)
-    base_var = sigma2_irregular + sigma2_level + sigma2_seasonal
-
-    # Calculate variance for each forecast step
-    forecast_var = np.zeros(steps)
-    for i in range(steps):
-        # Calculate how many complete seasonal cycles we're forecasting
-        cycles = min(i / 24, 3)  # Cap at 3 cycles
-        # Add a small additional uncertainty for weekly pattern
-        weekly_uncertainty = 0.05 * (i / (24 * 7))  # 5% increase per week
-
-        # Additional uncertainty during Christmas period
-        is_christmas = exog_forecast['christmas_evening'].iloc[i] == 1
-        christmas_factor = 0.2 if is_christmas else 0
-
-        forecast_var[i] = base_var * (1 + cycles * 0.1 +
-                                    min(weekly_uncertainty, 0.15) +
-                                    christmas_factor)
-
-    # Create confidence intervals
-    z_score = 1.96  # 95% confidence
-    ci_lower = forecast - z_score * np.sqrt(forecast_var)
-    ci_upper = forecast + z_score * np.sqrt(forecast_var)
-
-    # Ensure non-negative values
-    ci_lower = np.maximum(ci_lower, 0)
-
-    return forecast, pd.DataFrame({
-        'lower': ci_lower,
-        'upper': ci_upper
+    # Create forecast DataFrame
+    forecast_df = pd.DataFrame({
+        'DateTime': forecast_dates,
+        'UCM': forecasts
     })
+
+    return forecast_df
+
+# Run UCM pipeline
+print("Starting UCM pipeline...")
+
+try:
+    # Train model
+    ucm_model = develop_ucm_model(df)
+
+    # Generate forecasts
+    december_forecasts = generate_ucm_forecasts(ucm_model)
+
+    # Save forecasts
+    december_forecasts.to_csv('ucm_forecasts.csv', index=False)
+    print("\nForecasts saved to 'ucm_forecasts.csv'")
+
+    # Verify saved forecasts
+    verify_df = pd.read_csv('ucm_forecasts.csv')
+    print("\nVerification of saved forecasts:")
+    print(verify_df.head())
+    print("\nShape:", verify_df.shape)
+    print("\nDescriptive statistics:")
+    print(verify_df['UCM'].describe())
+
+except Exception as e:
+    print(f"Error in UCM pipeline: {str(e)}")
+    raise
+
+# Cell 44 - Plot UCM Results
+def plot_ucm_results(df, forecast_csv, solution_path):
+    """
+    Plot November actuals, December UCM forecasts, and December real values
+    """
+    # Read forecasts
+    forecasts = pd.read_csv(forecast_csv)
+    forecasts['DateTime'] = pd.to_datetime(forecasts['DateTime'])
+
+    # Read solution
+    solution = pd.read_csv(solution_path)
+    solution['datetime'] = pd.to_datetime(solution['DateTime'])
+
+    # Get November data
+    november_data = df['2016-11-01':'2016-11-30 23:00:00']
+
+    # Create plot
+    plt.figure(figsize=(15, 8))
+
+    # Plot data
+    plt.plot(november_data.index, november_data['X'],
+             label='November 2016 (Actual)',
+             color='#000080',  # Dark Blue
+             linewidth=2)
+
+    plt.plot(forecasts['DateTime'], forecasts['UCM'],
+             label='December 2016 (UCM Forecast)',
+             color='#FFA500',  # Orange
+             linewidth=2,
+             linestyle='--')
+
+    plt.plot(solution['datetime'], solution['X'],
+             label='December 2016 (Actual)',
+             color='#008000',  # Green
+             linewidth=2)
+
+    plt.title('UCM Model: November Actuals vs December Forecast and Actual Values')
+    plt.ylabel('Traffic Congestion')
+    plt.xlabel('Date')
+    plt.legend()
+    plt.grid(True)
+
+    # Add error metrics
+    rmse = np.sqrt(mean_squared_error(solution['X'], forecasts['UCM']))
+    mae = mean_absolute_error(solution['X'], forecasts['UCM'])
+    mape = np.mean(np.abs((solution['X'] - forecasts['UCM']) / solution['X'])) * 100
+
+    metrics_text = f'December Forecast Metrics:\nRMSE: {rmse:.4f}\nMAE: {mae:.4f}\nMAPE: {mape:.2f}%'
+    plt.text(0.02, 0.98, metrics_text,
+             transform=plt.gca().transAxes,
+             verticalalignment='top',
+             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+    plt.tight_layout()
+    plt.show()
+
+    return rmse, mae, mape
+
+# Execute the plot if files exist
+if os.path.exists('ucm_forecasts.csv') and os.path.exists(os.path.join('solution', 't2_solution.csv')):
+    print("Plotting UCM results...")
+    rmse, mae, mape = plot_ucm_results(df, 'ucm_forecasts.csv', os.path.join('solution', 't2_solution.csv'))
+else:
+    print("Missing required files. Please check both forecast and solution files exist.")
 
 # Cell 45 - Run UCM Pipeline and Compare Models
 print("Starting UCM modeling pipeline...")
@@ -2436,12 +2399,12 @@ def create_supervised_dataset(df, target_col='X', lags=[1, 24], lead=1):
     df : pd.DataFrame
         Your time series DataFrame with a DateTime index.
     target_col : str
-        The column name for the target variable (e.g., traffic congestion).
+        The column name for the target variable (traffic congestion).
     lags : list
-        The list of 'lag' offsets to include as features. For example:
-            [1, 24] means X(t-1) and X(t-24).
+        The list of 'lag' offsets to include as features.
+        [1, 24] means X(t-1) and X(t-24).
     lead : int
-        How far ahead to forecast. lead=1 => next hour, lead=24 => next day.
+        How far ahead to forecast. lead=1 => next hour.
 
     Returns:
     --------
@@ -2450,6 +2413,7 @@ def create_supervised_dataset(df, target_col='X', lags=[1, 24], lead=1):
     y_data : pd.Series
         Corresponding target values
     """
+    print(f"Data range: {df.index.min()} to {df.index.max()}")
 
     df_supervised = df.copy()
 
@@ -2458,7 +2422,6 @@ def create_supervised_dataset(df, target_col='X', lags=[1, 24], lead=1):
         df_supervised[f'lag_{lag}'] = df_supervised[target_col].shift(lag)
 
     # Create lead target
-    # 'lead=1' means we want to predict X(t+1) using features at time t
     df_supervised[f'y_lead_{lead}'] = df_supervised[target_col].shift(-lead)
 
     # Drop any rows with NaNs introduced by shifting
@@ -2466,8 +2429,7 @@ def create_supervised_dataset(df, target_col='X', lags=[1, 24], lead=1):
 
     # Define X and y
     feature_cols = [col for col in df_supervised.columns if col.startswith('lag_')
-                    or col in ['hour', 'day_of_week', 'month', 'is_weekend',
-                               'rolling_mean_24h', 'rolling_std_24h']]
+                    or col in ['hour', 'day_of_week', 'month', 'is_weekend']]
     X_data = df_supervised[feature_cols]
     y_data = df_supervised[f'y_lead_{lead}']
 
@@ -2475,44 +2437,57 @@ def create_supervised_dataset(df, target_col='X', lags=[1, 24], lead=1):
 
 # Cell 49 - Prepare the Data and Create Train/Validation Sets
 
-# Suppose we want to forecast 1 hour ahead
+# First, ensure we only use data up to November 2016
+training_end = '2016-10-31 23:00:00'
+validation_end = '2016-11-30 23:00:00'
+
+# Split the data into training and validation periods
+df_train = df_processed[:'2016-10-31 23:00:00'].copy()
+df_val = df_processed['2016-11-01':'2016-11-30 23:00:00'].copy()
+
+print(f"Training data range: {df_train.index.min()} to {df_train.index.max()}")
+print(f"Validation data range: {df_val.index.min()} to {df_val.index.max()}")
+
+# Create supervised datasets
 lead = 1
-lag_list = [1, 24]  # Feel free to add more, e.g. 2, 3, 6, 12, etc.
+lag_list = [1, 24]  # You can add more lags if desired
 
-X_all, y_all = create_supervised_dataset(df_processed,
-                                         target_col='X',
-                                         lags=lag_list,
-                                         lead=lead)
+# Create training set
+X_train, y_train = create_supervised_dataset(df_train,
+                                           target_col='X',
+                                           lags=lag_list,
+                                           lead=lead)
 
-X_all.drop(['rolling_mean_24h','rolling_std_24h'], axis=1, errors='ignore', inplace=True)
+# Create validation set
+X_val, y_val = create_supervised_dataset(df_val,
+                                        target_col='X',
+                                        lags=lag_list,
+                                        lead=lead)
 
-# Convert to NumPy arrays or keep as DataFrame
-X_all_values = X_all.values
-y_all_values = y_all.values
+# Convert to NumPy arrays
+X_train_values = X_train.values
+y_train_values = y_train.values
+X_val_values = X_val.values
+y_val_values = y_val.values
 
-# We can do a time-based train/val split:
-# Let's say we keep the last 'validation_size' rows for validation
-validation_size = 744  # last month or 31 days * 24h
-train_size = len(X_all) - validation_size
+# Save column names for later use in forecasting
+X_train_columns_global = list(X_train.columns)
 
-X_train, X_val = X_all_values[:train_size], X_all_values[train_size:]
-y_train, y_val = y_all_values[:train_size], y_all_values[train_size:]
+print("\nTraining set size:", X_train_values.shape)
+print("Validation set size:", X_val_values.shape)
 
-print("Training set size:", X_train.shape, y_train.shape)
-print("Validation set size:", X_val.shape, y_val.shape)
-
-# Cell 50 - Train and Evaluate an XGBoost Model
+# Cell 50 - Train and Evaluate XGBoost Model
 
 # Create DMatrix objects for XGBoost
-dtrain = xgb.DMatrix(X_train, label=y_train)
-dval = xgb.DMatrix(X_val, label=y_val)
+dtrain = xgb.DMatrix(X_train_values, label=y_train_values)
+dval = xgb.DMatrix(X_val_values, label=y_val_values)
 
-# Define XGBoost parameters (these are just a starting point)
+# Define XGBoost parameters
 xgb_params = {
     'objective': 'reg:squarederror',
     'eval_metric': 'rmse',
-    'eta': 0.1,          # learning rate
-    'max_depth': 6,      # depth of each tree
+    'eta': 0.1,
+    'max_depth': 6,
     'subsample': 0.8,
     'colsample_bytree': 0.8,
     'seed': 42
@@ -2530,229 +2505,438 @@ bst = xgb.train(params=xgb_params,
 # Make predictions on the validation set
 y_val_pred = bst.predict(dval)
 
+# Store training residuals for later use in confidence intervals
+y_train_pred = bst.predict(dtrain)
+train_residuals = y_train_values - y_train_pred
+resid_std = np.std(train_residuals)
+
 # Evaluate performance
-rmse_val = np.sqrt(mean_squared_error(y_val, y_val_pred))
-mae_val = mean_absolute_error(y_val, y_val_pred)
-mape_val = np.mean(np.abs((y_val - y_val_pred) / y_val)) * 100
+rmse_val = np.sqrt(mean_squared_error(y_val_values, y_val_pred))
+mae_val = mean_absolute_error(y_val_values, y_val_pred)
+mape_val = np.mean(np.abs((y_val_values - y_val_pred) / y_val_values)) * 100
 
-print(f"Validation RMSE: {rmse_val:.4f}")
-print(f"Validation MAE:  {mae_val:.4f}")
-print(f"Validation MAPE: {mape_val:.2f}%")
+print("\nValidation Metrics (November 2016):")
+print(f"RMSE: {rmse_val:.4f}")
+print(f"MAE:  {mae_val:.4f}")
+print(f"MAPE: {mape_val:.2f}%")
 
-# Cell 51 - Visualize ML Model Predictions vs Actual on Validation Set
+# Save these for global access in forecasting
+X_train_global = X_train_values
+y_train_global = y_train_values
 
-val_index = X_all.index[train_size:]  # If X_all is a DataFrame with the same index
-# If X_all isn't a DataFrame with an index, you can reconstruct from df_processed or use a date range.
-
-import matplotlib.dates as mdates
+# Cell 51 - Visualize ML Model Predictions vs Actual on Validation Set (November 2016)
 
 plt.figure(figsize=(15, 6))
 
-plt.plot(val_index, y_val, label='Actual', color='blue')
+# Get the exact index from our validation data
+val_index = df_val.index[24:len(y_val_values)+24]  # Align with y_val_values length
+
+# Verify dimensions before plotting
+print(f"Validation index length: {len(val_index)}")
+print(f"y_val_values length: {len(y_val_values)}")
+print(f"y_val_pred length: {len(y_val_pred)}")
+
+# Create the plot
+plt.plot(val_index, y_val_values, label='Actual (November 2016)', color='blue')
 plt.plot(val_index, y_val_pred, label='XGBoost Predictions', color='red', linestyle='--')
-plt.title('XGBoost Model - Validation Set Predictions')
+plt.title('XGBoost Model - November 2016 Validation Set Predictions')
 plt.xlabel('DateTime')
 plt.ylabel('Traffic Congestion')
 plt.legend()
 plt.grid(True)
 
-# Format x-axis if desired
+# Format x-axis
 plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
 plt.xticks(rotation=45)
+
+# Add metrics as text box
+metrics_text = f'RMSE: {rmse_val:.4f}\nMAE: {mae_val:.4f}\nMAPE: {mape_val:.2f}%'
+plt.text(0.02, 0.98, metrics_text,
+         transform=plt.gca().transAxes,
+         verticalalignment='top',
+         bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
 plt.tight_layout()
 plt.show()
 
-# Cell 52 - Check Feature Importance and Save the Model
+# Cell 52 - Feature Importance and Model Save
+print("Plotting Feature Importance...")
 
 # Plot feature importance
-xgb.plot_importance(bst, max_num_features=10, importance_type='gain')
+fig, ax = plt.subplots(figsize=(10, 6))
+xgb.plot_importance(bst, max_num_features=10, importance_type='gain', ax=ax)
 plt.title('Feature Importance (Gain)')
+plt.tight_layout()
 plt.show()
 
 # Save the trained model
-bst.save_model('xgb_traffic_congestion.model')
+model_path = 'xgb_traffic_model.json'
+bst.save_model(model_path)
+print(f"\nModel saved to {model_path}")
 
-# Or using pickle:
-# with open('xgb_traffic_model.pkl', 'wb') as f:
-#     pickle.dump(bst, f)
-
-# Cell 53 - Recursive forecaster for December 2016
-def forecast_december_2016_xgb(model, df_processed, start_date='2016-12-01', end_date='2016-12-31 23:00:00'):
+# Cell 53 - Recursive Forecasting Function for December 2016
+def forecast_december_2016_xgb(model, last_known_data, start_date='2016-12-01', end_date='2016-12-31 23:00:00'):
     """
-    Recursively forecast December 2016 (744 hours) using the trained XGBoost model.
-    We'll:
-    1) Start from the last known row (Nov 30, 2016),
-    2) For each hour in December, create the required lag features,
-    3) Predict X(t+1),
-    4) Append the prediction to our dataset so we can use it as a lag for the next step.
-
-    Returns:
-      forecast_df (pd.DataFrame) with datetime, predicted, and naive +/-1.96*std intervals.
+    Recursively forecast December 2016 using the trained XGBoost model.
     """
+    print("Starting December 2016 forecasting...")
 
-    # 1) We need the standard deviation of residuals from training to create naive intervals
-    #    If you haven't saved residuals, we can quickly compute them from the training set.
-    #    The easiest is to re-predict on the training set:
-    from copy import deepcopy
-    import numpy as np
+    # Create forecast dates
+    forecast_dates = pd.date_range(start=start_date, end=end_date, freq='H')
+    print(f"Forecasting {len(forecast_dates)} hours")
 
-    X_train = xgb.DMatrix(X_train_global)  # We'll define X_train_global in the next cell
-    y_train_pred = model.predict(X_train)
-    train_resid = y_train_global - y_train_pred
-    resid_std = np.std(train_resid)  # standard deviation of training residuals
+    # Initialize forecast array
+    forecasts = []
 
-    # 2) We'll copy df_processed so as not to modify the original
-    df_copy = df_processed.copy()
+    # Get the last known values for initial lags
+    last_known = last_known_data.copy()
 
-    # We'll ensure our DataFrame is sorted and we only do the recursive from the last known date
-    df_copy.sort_index(inplace=True)
-    last_known_time = pd.Timestamp('2016-11-30 23:00:00')
-
-    # 3) Build an empty list to store predictions
-    future_preds = []
-
-    # 4) We'll create a range of timestamps from 2016-12-01 to 2016-12-31 23:00:00
-    future_dates = pd.date_range(start=start_date, end=end_date, freq='H')
-
-    # 5) Recursive loop
-    current_time = last_known_time
-    for future_time in future_dates:
-        # Create row of features for 'future_time - 1 hour' if we want to predict this hour
-        # Actually, since we used "lead=1", we want to predict X(future_time) using data as of (future_time - 1h).
-
-        # We'll define a small function to build the feature row:
-        row_features = build_feature_row(df_copy, future_time - pd.Timedelta(hours=1))
-
-        # Make a single prediction using the model
-        dpred = xgb.DMatrix(row_features)
-        pred_value = model.predict(dpred)[0]
-
-        # Append the predicted value as X(future_time) to the DataFrame
-        new_row = {
-            'X': pred_value,
+    # Recursive forecasting
+    for future_time in forecast_dates:
+        # Create feature row
+        features = {
+            'lag_1': last_known['X'].iloc[-1],
+            'lag_24': last_known['X'].iloc[-24],
             'hour': future_time.hour,
             'day_of_week': future_time.dayofweek,
             'month': future_time.month,
             'is_weekend': 1 if future_time.dayofweek in [5, 6] else 0
-            # If you rely on rolling_mean_24h or rolling_std_24h,
-            # you'd need a dynamic way to update them.
-            # For simplicity, we won't recalc rolling stats here
-            # (or you can do a more advanced approach).
         }
-        df_copy.loc[future_time] = new_row
 
-        # Save the final predicted value for plotting
-        future_preds.append((future_time, pred_value))
+        # Convert to DataFrame with correct column order
+        feature_df = pd.DataFrame([features])
+        feature_df = feature_df[X_train_columns_global]
 
-    # 6) Build a forecast DataFrame
-    forecast_df = pd.DataFrame(future_preds, columns=['datetime', 'XGB_forecast'])
-    forecast_df.set_index('datetime', inplace=True)
+        # Make prediction
+        dpred = xgb.DMatrix(feature_df)
+        pred = float(model.predict(dpred)[0])
+        pred = max(0, pred)  # Ensure non-negative
 
-    # 7) Compute naive confidence intervals
-    #    +/- 1.96 * resid_std
-    ci = 1.96 * resid_std
-    forecast_df['lower'] = forecast_df['XGB_forecast'].apply(lambda x: max(x - ci, 0))  # non-negative
-    forecast_df['upper'] = forecast_df['XGB_forecast'] + ci
+        # Store forecast
+        forecasts.append(pred)
 
-    return forecast_df
+        # Update last_known for next iteration
+        new_row = pd.DataFrame({'X': [pred]}, index=[future_time])
+        last_known = pd.concat([last_known, new_row]).tail(24)
 
+    return pd.Series(forecasts, index=forecast_dates)
 
-def build_feature_row(df_processed, ref_time):
-    """
-    Build a single row of features for XGBoost based on:
-      - X(t-1), X(t-24),
-      - hour, day_of_week, month, is_weekend
-      - rolling_mean_24h, rolling_std_24h (if feasible).
+# Cell 54 - Generate and Plot Final Forecasts
+print("Generating and plotting final forecasts...")
 
-    Returns: a one-row DataFrame matching the columns used by X_train.
-    """
-    # For clarity, let's just implement the same lags from the create_supervised_dataset
-    # Note: This function must replicate the logic of "lag_1, lag_24, plus any other features"
-    import pandas as pd
+# Get last month of known data (November 2016)
+last_known_data = df[:'2016-11-30 23:00:00'].tail(24)
 
-    # We'll gather the row that corresponds to ref_time in df_processed
-    # (We assume it already exists in df_copy if we do recursive approach)
-    if ref_time not in df_processed.index:
-        # If not found, just create a row of zeros or do something
-        # But ideally, your code ensures continuity.
-        return pd.DataFrame([0], columns=['lag_1'])  # minimal fallback
+# Generate December forecasts
+december_forecasts = forecast_december_2016_xgb(bst, last_known_data)
 
-    # We'll build a dictionary for each feature
-    row_dict = {}
+# Load solution data
+solution_path = os.path.join('solution', 't2_solution.csv')
+solution_data = pd.read_csv(solution_path)
+solution_data['datetime'] = pd.to_datetime(solution_data['DateTime'])
+solution_data.set_index('datetime', inplace=True)
 
-    # lag_1 means X at ref_time
-    row_dict['lag_1'] = df_processed.loc[ref_time, 'X'] if ref_time in df_processed.index else 0.0
-
-    # lag_24 means X at ref_time - 23 hours
-    # (Be careful that if we want X(t-24), that means 24 hours behind the 'ref_time+1'...
-    # We'll keep it consistent with create_supervised_dataset's logic.)
-    lag_24_time = ref_time - pd.Timedelta(hours=23)  # or 24, depending on your definition
-    row_dict['lag_24'] = df_processed.loc[lag_24_time, 'X'] if lag_24_time in df_processed.index else 0.0
-
-    # hour, day_of_week, month, is_weekend
-    row_dict['hour'] = ref_time.hour
-    row_dict['day_of_week'] = ref_time.dayofweek
-    row_dict['month'] = ref_time.month
-    row_dict['is_weekend'] = 1 if ref_time.dayofweek in [5, 6] else 0
-
-    # If you want rolling stats, you'd have to keep them updated.
-    # For simplicity, let's skip.
-    # If you do want them, you must recalc them from the newly appended predictions.
-
-    # Convert to DataFrame with the same column order as X_train_global
-    row_df = pd.DataFrame([row_dict])
-    row_df = row_df[X_train_columns_global]  # ensure same column order
-    return row_df
-
-# Cell 54 - Generate December 2016 Forecast and Plot with Nov 2016 + Real Values
-
-# 1) We must define X_train_global, y_train_global, X_train_columns_global for the function above
-#    These are basically the final arrays or data frames used in training.
-#    We'll name them consistently here:
-
-X_train_global = X_train  # from your prior ML split cell
-y_train_global = y_train
-X_train_columns_global = list(X_all.columns)  # the columns in the original feature DataFrame
-
-# 2) Run the forecaster
-forecast_xgb_df = forecast_december_2016_xgb(bst, df_processed)
-
-# 3) Load real December 2016 values from solution
-dec_solution = pd.read_csv('solution/t2_solution.csv')
-dec_solution['DateTime'] = pd.to_datetime(dec_solution['DateTime'], format='mixed', errors='coerce')
-dec_solution.set_index('DateTime', inplace=True)
-dec_solution.sort_index(inplace=True)
-
-# 4) Extract Nov 2016 actuals from your main df
-november_actuals = df.loc['2016-11-01':'2016-11-30 23:00:00', 'X']  # or .copy()
-
-# 5) Plot everything
+# Create visualization
 plt.figure(figsize=(15, 8))
 
-# Plot November actual
-plt.plot(november_actuals.index, november_actuals.values,
-         label='November Actual (Historical)',
+# Plot November actual data
+november_data = df['2016-11-01':'2016-11-30']
+plt.plot(november_data.index, november_data['X'],
+         label='November 2016 (Actual)',
          color='blue', linewidth=2)
 
-# Plot December XGBoost forecast
-plt.plot(forecast_xgb_df.index, forecast_xgb_df['XGB_forecast'],
-         label='December 2016 XGBoost Forecast',
-         color='red', linestyle='--')
+# Plot December forecasts
+plt.plot(december_forecasts.index, december_forecasts.values,
+         label='December 2016 (XGBoost Forecast)',
+         color='red', linestyle='--', linewidth=2)
 
-# Plot naive confidence intervals
-plt.fill_between(forecast_xgb_df.index,
-                 forecast_xgb_df['lower'],
-                 forecast_xgb_df['upper'],
-                 color='red', alpha=0.2,
-                 label='Naive ±1.96σ Band')
-
-# Plot December real values from solution
-dec_real = dec_solution.loc['2016-12-01':'2016-12-31 23:00:00', 'X']
-plt.plot(dec_real.index, dec_real.values,
-         label='December 2016 Actual (Solution)',
+# Plot December actual (solution)
+plt.plot(solution_data.index, solution_data['X'],
+         label='December 2016 (Actual)',
          color='green', linewidth=2)
 
-plt.title('November 2016 Actuals vs. December 2016 XGBoost Forecast + Real Values')
+plt.title('Traffic Congestion: November 2016 (Actual) vs December 2016 (Forecast & Actual)')
+plt.xlabel('Date')
+plt.ylabel('Traffic Congestion')
+plt.legend()
+plt.grid(True)
+
+# Add error metrics
+dec_rmse = np.sqrt(mean_squared_error(solution_data['X'], december_forecasts))
+dec_mae = mean_absolute_error(solution_data['X'], december_forecasts)
+dec_mape = np.mean(np.abs((solution_data['X'] - december_forecasts) / solution_data['X'])) * 100
+
+metrics_text = f'December Forecast Metrics:\nRMSE: {dec_rmse:.4f}\nMAE: {dec_mae:.4f}\nMAPE: {dec_mape:.2f}%'
+plt.text(0.02, 0.98, metrics_text,
+         transform=plt.gca().transAxes,
+         verticalalignment='top',
+         bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+plt.tight_layout()
+plt.show()
+
+# Save forecasts to CSV
+forecast_df = pd.DataFrame({
+    'datetime': december_forecasts.index,
+    'XGB_forecast': december_forecasts.values
+})
+forecast_df.to_csv('xgboost_december_forecasts.csv', index=False)
+print("\nForecasts saved to 'xgboost_december_forecasts.csv'")
+
+print("\nDecember 2016 Forecast Error Metrics:")
+print(f"RMSE: {dec_rmse:.4f}")
+print(f"MAE:  {dec_mae:.4f}")
+print(f"MAPE: {dec_mape:.2f}%")
+
+"""## LSTM"""
+
+# Cell 55 - LSTM Data Preparation
+
+import numpy as np
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
+from sklearn.preprocessing import MinMaxScaler  # or StandardScaler
+
+# 1) Create a windowed dataset (sequence to next-step) from Jan 2015 - Nov 2016
+#    We assume df_processed has a datetime index from 2015-01 to 2016-12 (with 2016-12 missing or separate).
+#    We only want data up to 2016-11-30 23:00:00 for training/validation.
+
+train_end = '2016-11-30 23:00:00'
+df_lstm = df_processed.loc[:train_end].copy()
+
+# We'll just use 'X' for demonstration. If you want more features, you can create them and include them below.
+feature_cols = ['X']
+df_lstm = df_lstm[feature_cols].dropna()
+
+# 2) Scale the data
+scaler = MinMaxScaler()  # or StandardScaler()
+scaled_values = scaler.fit_transform(df_lstm.values)  # shape: (num_samples, num_features)
+scaled_df = np.array(scaled_values).reshape(-1)  # flatten if we have only one feature
+
+# 3) Create a PyTorch Dataset for LSTM
+#    We'll define a class that returns sequences of length seq_length and the next value as the target.
+
+class LSTMDataset(Dataset):
+    def __init__(self, data, seq_length=24):
+        """
+        data: 1D (or 2D) scaled array of shape (num_samples, )
+        seq_length: how many time steps in the input sequence
+        """
+        self.data = data
+        self.seq_length = seq_length
+
+    def __len__(self):
+        # If we want to predict the next step after seq_length,
+        # the last index we can start a sequence is len(data)-seq_length-1
+        return len(self.data) - self.seq_length
+
+    def __getitem__(self, idx):
+        x_seq = self.data[idx : idx + self.seq_length]  # input sequence
+        y_val = self.data[idx + self.seq_length]         # next step
+        # If your data has multiple features, x_seq will be shape (seq_length, num_features).
+        # If single feature, x_seq is (seq_length, ), so we might need to expand dims for PyTorch LSTM.
+        x_seq = torch.tensor(x_seq, dtype=torch.float).unsqueeze(-1)  # shape: (seq_length, 1)
+        y_val = torch.tensor(y_val, dtype=torch.float)
+        return x_seq, y_val
+
+# 4) Instantiate the dataset and create DataLoaders
+seq_length = 24  # how many hours to look back
+dataset = LSTMDataset(scaled_df, seq_length=seq_length)
+
+# We can do a train/val split of the dataset. For example, last ~744 points (about 31 days) as validation.
+val_size = 744  # same idea as for ARIMA
+train_size = len(dataset) - val_size
+train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
+
+batch_size = 32
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, drop_last=True)
+
+print(f"Full dataset length: {len(dataset)}")
+print(f"Training samples:    {len(train_dataset)}")
+print(f"Validation samples:  {len(val_dataset)}")
+
+# Cell 56 - Define LSTM Model
+
+class TrafficLSTM(nn.Module):
+    def __init__(self, input_size=1, hidden_size=64, num_layers=2, dropout=0.2):
+        super(TrafficLSTM, self).__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.lstm = nn.LSTM(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            batch_first=True,
+            dropout=dropout
+        )
+        self.fc = nn.Linear(hidden_size, 1)  # final layer to predict 1 value
+
+    def forward(self, x):
+        # x shape: (batch_size, seq_length, input_size)
+        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(device)
+        c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(device)
+
+        out, _ = self.lstm(x, (h0, c0))  # out: (batch_size, seq_length, hidden_size)
+        # We only need the last time step's output for next-step prediction
+        out = out[:, -1, :]             # shape: (batch_size, hidden_size)
+        out = self.fc(out)             # shape: (batch_size, 1)
+        return out
+
+# Instantiate the model
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model = TrafficLSTM(input_size=1, hidden_size=64, num_layers=2, dropout=0.2).to(device)
+
+print(model)
+
+# Cell 57 - Training the LSTM Model
+
+import torch.optim as optim
+
+criterion = nn.MSELoss()
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+num_epochs = 20
+
+train_losses = []
+val_losses = []
+
+for epoch in range(num_epochs):
+    model.train()
+    running_train_loss = 0.0
+
+    for x_batch, y_batch in train_loader:
+        x_batch = x_batch.to(device)  # shape: (batch_size, seq_length, 1)
+        y_batch = y_batch.to(device)  # shape: (batch_size,)
+
+        optimizer.zero_grad()
+        outputs = model(x_batch).squeeze()  # shape: (batch_size,)
+
+        loss = criterion(outputs, y_batch)
+        loss.backward()
+        optimizer.step()
+
+        running_train_loss += loss.item() * x_batch.size(0)
+
+    epoch_train_loss = running_train_loss / len(train_dataset)
+
+    # --- Validation ---
+    model.eval()
+    running_val_loss = 0.0
+    with torch.no_grad():
+        for x_val, y_val in val_loader:
+            x_val = x_val.to(device)
+            y_val = y_val.to(device)
+            val_out = model(x_val).squeeze()
+            val_loss = criterion(val_out, y_val)
+            running_val_loss += val_loss.item() * x_val.size(0)
+
+    epoch_val_loss = running_val_loss / len(val_dataset)
+
+    train_losses.append(epoch_train_loss)
+    val_losses.append(epoch_val_loss)
+
+    print(f"Epoch [{epoch+1}/{num_epochs}] - "
+          f"Train Loss: {epoch_train_loss:.6f} | "
+          f"Val Loss: {epoch_val_loss:.6f}")
+
+# Cell 58 - Plot Training History
+
+import matplotlib.pyplot as plt
+
+plt.figure(figsize=(10, 5))
+plt.plot(train_losses, label='Training Loss', marker='o')
+plt.plot(val_losses, label='Validation Loss', marker='x')
+plt.title('LSTM Training vs Validation Loss')
+plt.xlabel('Epoch')
+plt.ylabel('MSE Loss')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# Cell 60 - Forecasting December 2016
+
+# 1) We'll generate a date range for December 2016
+dec_dates = pd.date_range('2016-12-01 00:00:00', '2016-12-31 23:00:00', freq='H')
+
+# 2) We need the last seq_length values from the training dataset to start
+#    e.g., from 2016-11-30 23:00:00 going backward 24 hours
+last_seq = df_processed.loc[:'2016-11-30 23:00:00'].tail(seq_length)['X'].values
+#    If your data is missing hours, ensure you handle that carefully.
+
+# 3) Scale that last sequence
+last_seq_scaled = scaler.transform(last_seq.reshape(-1, 1)).ravel()  # shape: (seq_length,)
+
+# 4) Recursive forecasting
+model.eval()
+dec_forecasts = []
+
+current_seq = list(last_seq_scaled)  # start as a Python list of length seq_length
+
+for d in dec_dates:
+    seq_input = torch.tensor(current_seq[-seq_length:], dtype=torch.float).unsqueeze(0).unsqueeze(-1).to(device)
+    # shape: (1, seq_length, 1)
+    with torch.no_grad():
+        pred_scaled = model(seq_input).cpu().numpy().flatten()[0]  # single float
+    # unscale
+    pred_unscaled = scaler.inverse_transform(pred_scaled.reshape(-1, 1)).flatten()[0]
+
+    dec_forecasts.append(pred_unscaled)
+
+    # append the scaled prediction to current_seq
+    current_seq.append(pred_scaled)
+
+# 5) Build a DataFrame of forecasts
+forecast_df_lstm = pd.DataFrame({
+    'datetime': dec_dates,
+    'LSTM_forecast': dec_forecasts
+})
+forecast_df_lstm.set_index('datetime', inplace=True)
+
+# 6) If we have the real December data (solution), compare
+solution_path = 'solution/t2_solution.csv'
+try:
+    dec_solution = pd.read_csv(solution_path)
+    dec_solution['DateTime'] = pd.to_datetime(dec_solution['DateTime'], format='mixed', errors='coerce')
+    dec_solution.set_index('DateTime', inplace=True)
+    dec_solution.sort_index(inplace=True)
+
+    # Extract December 2016 real X
+    dec_real = dec_solution.loc['2016-12-01 00:00:00':'2016-12-31 23:00:00', 'X']
+
+    # Calculate error metrics
+    common_index = forecast_df_lstm.index.intersection(dec_real.index)
+    y_pred_dec = forecast_df_lstm.loc[common_index, 'LSTM_forecast']
+    y_true_dec = dec_real.loc[common_index]
+
+    rmse_dec = np.sqrt(mean_squared_error(y_true_dec, y_pred_dec))
+    mae_dec = mean_absolute_error(y_true_dec, y_pred_dec)
+    mape_dec = np.mean(np.abs((y_true_dec - y_pred_dec) / y_true_dec)) * 100
+
+    print("\nDecember 2016 LSTM Forecast Error Metrics:")
+    print(f"  RMSE: {rmse_dec:.4f}")
+    print(f"  MAE:  {mae_dec:.4f}")
+    print(f"  MAPE: {mape_dec:.2f}%")
+except Exception as e:
+    print("Could not load real December 2016 data for comparison. Skipping metrics.")
+
+# 7) Plot the results vs November data and real December if available
+import matplotlib.pyplot as plt
+
+november_actuals = df.loc['2016-11-01':'2016-11-30 23:00:00', 'X']
+
+plt.figure(figsize=(15, 8))
+# Plot November actuals
+plt.plot(november_actuals.index, november_actuals.values, label='November Actual', color='blue')
+
+# Plot LSTM forecast for December
+plt.plot(forecast_df_lstm.index, forecast_df_lstm['LSTM_forecast'], label='LSTM Forecast (Dec 2016)', color='red', linestyle='--')
+
+# If real December values exist, plot them
+if 'dec_real' in locals():
+    plt.plot(dec_real.index, dec_real.values, label='December Actual (Solution)', color='green', linewidth=2)
+
+plt.title('November 2016 Actuals vs. December 2016 LSTM Forecast')
 plt.xlabel('DateTime')
 plt.ylabel('Traffic Congestion')
 plt.legend()
@@ -2760,16 +2944,188 @@ plt.grid(True)
 plt.tight_layout()
 plt.show()
 
-# 6) (Optional) Print out error metrics for December
-common_index = forecast_xgb_df.index.intersection(dec_real.index)
-y_true_dec = dec_real.loc[common_index]
-y_pred_dec = forecast_xgb_df.loc[common_index, 'XGB_forecast']
+"""# FINAL SAVING"""
 
-rmse_dec = np.sqrt(mean_squared_error(y_true_dec, y_pred_dec))
-mae_dec = mean_absolute_error(y_true_dec, y_pred_dec)
-mape_dec = np.mean(np.abs((y_true_dec - y_pred_dec) / y_true_dec)) * 100
+# Cell - Final Submission File Creation
+from datetime import datetime
+import pandas as pd
+import os
 
-print("December Forecast Error Metrics:")
-print(f"  RMSE: {rmse_dec:.4f}")
-print(f"  MAE:  {mae_dec:.4f}")
-print(f"  MAPE: {mape_dec:.2f}%")
+def create_final_submission():
+    """
+    Create final submission file combining SARIMAX, UCM, and ML forecasts.
+    """
+    print("Creating final submission file...")
+
+    # Create submission filename with current date
+    submission_date = datetime.now().strftime('%Y%m%d')
+    submission_filename = f'902064_{submission_date}.csv'
+
+    # Create DateTime index
+    dates = pd.date_range(
+        start='2016-12-01 00:00:00',
+        end='2016-12-31 23:00:00',
+        freq='H'
+    )
+
+    # Initialize submission DataFrame
+    submission_df = pd.DataFrame({'DateTime': dates})
+
+    try:
+        # Load SARIMAX forecasts
+        if os.path.exists('sarimax_forecasts.csv'):
+            sarimax = pd.read_csv('sarimax_forecasts.csv')
+            submission_df['ARIMA'] = sarimax['SARIMAX']
+            print("SARIMAX forecasts loaded successfully")
+        else:
+            print("Warning: sarimax_forecasts.csv not found")
+            submission_df['ARIMA'] = None
+
+        # Load UCM forecasts
+        if os.path.exists('ucm_forecasts.csv'):
+            ucm = pd.read_csv('ucm_forecasts.csv')
+            submission_df['UCM'] = ucm['UCM']
+            print("UCM forecasts loaded successfully")
+        else:
+            print("Warning: ucm_forecasts.csv not found")
+            submission_df['UCM'] = None
+
+        # Load ML forecasts
+        if os.path.exists('xgboost_december_forecasts.csv'):
+            ml = pd.read_csv('xgboost_december_forecasts.csv')
+            submission_df['ML'] = ml['XGB_forecast']
+            print("ML forecasts loaded successfully")
+        else:
+            print("Warning: xgboost_december_forecasts.csv not found")
+            submission_df['ML'] = None
+
+        # Save final submission file
+        submission_df.to_csv(submission_filename, index=False)
+        print(f"\nSubmission file saved as {submission_filename}")
+
+        # Verify the saved file
+        verify_df = pd.read_csv(submission_filename)
+        print("\nVerification of submission file:")
+        print("\nFirst few rows:")
+        print(verify_df.head())
+        print("\nLast few rows:")
+        print(verify_df.tail())
+        print("\nShape:", verify_df.shape)
+        print("\nColumns:", verify_df.columns.tolist())
+        print("\nSummary statistics:")
+        for col in ['ARIMA', 'UCM', 'ML']:
+            if col in verify_df.columns:
+                print(f"\n{col}:")
+                print(verify_df[col].describe())
+
+        # Check for any missing values
+        missing = verify_df.isnull().sum()
+        if missing.any():
+            print("\nWarning: Missing values detected:")
+            print(missing[missing > 0])
+
+    except Exception as e:
+        print(f"Error creating submission file: {str(e)}")
+        raise
+
+# Execute the function
+create_final_submission()
+
+# Cell - Final Comparison Plots
+def create_final_comparison_plots():
+    """
+    Create two comparison plots:
+    1. Three model forecasts for December 2016
+    2. Three model forecasts with actual December 2016 values
+    """
+    # Read the submission file
+    submission_date = datetime.now().strftime('%Y%m%d')
+    submission_filename = f'902064_{submission_date}.csv'
+    forecasts = pd.read_csv(submission_filename)
+    forecasts['DateTime'] = pd.to_datetime(forecasts['DateTime'])
+
+    # Read the solution
+    solution = pd.read_csv('solution/t2_solution.csv')
+    solution['DateTime'] = pd.to_datetime(solution['DateTime'])
+
+    # Create color scheme
+    colors = {
+        'ARIMA': '#FF6B6B',  # Coral red
+        'UCM': '#4ECDC4',    # Turquoise
+        'ML': '#45B7D1',     # Sky blue
+        'Actual': '#96CEB4'  # Sage green
+    }
+
+    # Plot 1: Three forecasts
+    plt.figure(figsize=(15, 6))
+    for model in ['ARIMA', 'UCM', 'ML']:
+        plt.plot(forecasts['DateTime'], forecasts[model],
+                label=f'{model} Forecast',
+                color=colors[model],
+                linewidth=2)
+
+    plt.title('December 2016: Model Forecasts Comparison')
+    plt.xlabel('Date')
+    plt.ylabel('Traffic Congestion')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+    # Plot 2: Forecasts with actual values
+    plt.figure(figsize=(15, 6))
+
+    # Plot forecasts
+    for model in ['ARIMA', 'UCM', 'ML']:
+        plt.plot(forecasts['DateTime'], forecasts[model],
+                label=f'{model} Forecast',
+                color=colors[model],
+                linewidth=2)
+
+    # Plot actual values
+    plt.plot(solution['DateTime'], solution['X'],
+            label='Actual Values',
+            color=colors['Actual'],
+            linewidth=2,
+            linestyle='--')
+
+    plt.title('December 2016: Model Forecasts vs Actual Values')
+    plt.xlabel('Date')
+    plt.ylabel('Traffic Congestion')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+
+    # Add error metrics as text box
+    metrics_text = "Error Metrics (RMSE):\n"
+    for model in ['ARIMA', 'UCM', 'ML']:
+        rmse = np.sqrt(mean_squared_error(solution['X'], forecasts[model]))
+        metrics_text += f"{model}: {rmse:.4f}\n"
+
+    plt.text(0.02, 0.98, metrics_text,
+             transform=plt.gca().transAxes,
+             verticalalignment='top',
+             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+    plt.tight_layout()
+    plt.show()
+
+    # Print comparison statistics
+    print("\nModel Performance Metrics:")
+    print("\nRoot Mean Square Error (RMSE):")
+    for model in ['ARIMA', 'UCM', 'ML']:
+        rmse = np.sqrt(mean_squared_error(solution['X'], forecasts[model]))
+        print(f"{model}: {rmse:.4f}")
+
+    print("\nMean Absolute Error (MAE):")
+    for model in ['ARIMA', 'UCM', 'ML']:
+        mae = mean_absolute_error(solution['X'], forecasts[model])
+        print(f"{model}: {mae:.4f}")
+
+    print("\nMean Absolute Percentage Error (MAPE):")
+    for model in ['ARIMA', 'UCM', 'ML']:
+        mape = np.mean(np.abs((solution['X'] - forecasts[model]) / solution['X'])) * 100
+        print(f"{model}: {mape:.2f}%")
+
+# Execute the function
+create_final_comparison_plots()
+
