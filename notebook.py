@@ -3129,3 +3129,1767 @@ def create_final_comparison_plots():
 # Execute the function
 create_final_comparison_plots()
 
+"""# NEW TRY"""
+
+# Cell 61 - 2015 Data Preparation and Feature Creation
+def create_2015_features(dates):
+    """
+    Create features: only day_sin for 2015 analysis
+    """
+    features = pd.DataFrame(index=dates)
+
+    # Day of week (0-6) as sine feature with Wednesday peak
+    days = 7
+    phase_shift = 2 * np.pi * 2/7  # 2 days shift for Wednesday peak
+    features['day_sin'] = np.sin(2 * np.pi * dates.dayofweek/days + phase_shift)
+
+    return features
+
+print("Preparing 2015 data...")
+
+# Get data from January to November 2015
+train_2015 = df['2015-01-01':'2015-11-30 23:00:00'].copy()
+actual_dec_2015 = df['2015-12-01':'2015-12-31 23:00:00'].copy()
+
+print(f"Training data range: {train_2015.index.min()} to {train_2015.index.max()}")
+print(f"Training data shape: {train_2015.shape}")
+
+# Cell 62 - Train 2015 SARIMAX Model
+def train_2015_sarimax(train_data):
+    """
+    Train SARIMAX model on 2015 data
+    """
+    print("Training 2015 SARIMAX model...")
+
+    # Prepare target variable
+    y = train_data['X'].astype(float)
+
+    # Create features
+    exog = create_2015_features(train_data.index)
+    print(f"Features included: {exog.columns.tolist()}")
+
+    try:
+        # Fit model
+        model = ARIMA(y,
+                     order=(2, 1, 2),
+                     seasonal_order=(1, 1, 1, 24),
+                     exog=exog,
+                     enforce_stationarity=False,
+                     enforce_invertibility=True)
+
+        results = model.fit()
+        print("\nModel Summary:")
+        print(results.summary())
+
+        return results
+
+    except Exception as e:
+        print(f"Error fitting model: {str(e)}")
+        raise
+
+# Train the model
+sarimax_2015 = train_2015_sarimax(train_2015)
+
+# Cell 63 - Generate December 2015 Forecasts
+def forecast_december_2015(model, train_data):
+    """
+    Generate forecasts for December 2015
+    """
+    # Create forecast dates
+    forecast_dates = pd.date_range(
+        start='2015-12-01',
+        end='2015-12-31 23:00:00',
+        freq='H'
+    )
+
+    # Create features for forecast period
+    exog_forecast = create_2015_features(forecast_dates)
+
+    # Generate forecasts
+    forecasts = model.forecast(steps=744, exog=exog_forecast)
+    forecasts = np.maximum(forecasts, 0)  # Ensure non-negative
+
+    return pd.Series(forecasts, index=forecast_dates)
+
+# Generate forecasts
+dec_2015_forecasts = forecast_december_2015(sarimax_2015, train_2015)
+
+# Cell 64 - Analyze Holiday Effect
+def analyze_2015_holiday_effect(forecasts, actuals):
+    """
+    Analyze and visualize the holiday effect in December 2015
+    """
+    plt.figure(figsize=(15, 10))
+
+    # Create subplot for full December
+    plt.subplot(211)
+    plt.plot(actuals.index, actuals['X'],
+             label='Actual Values',
+             color='blue', linewidth=2)
+    plt.plot(forecasts.index, forecasts,
+             label='SARIMAX Forecasts',
+             color='red', linewidth=2, linestyle='--')
+
+    plt.title('December 2015: Actual vs Forecast')
+    plt.xlabel('Date')
+    plt.ylabel('Traffic Congestion')
+    plt.legend()
+    plt.grid(True)
+
+    # Create subplot focusing on Christmas period (Dec 23-26)
+    plt.subplot(212)
+    christmas_period = slice('2015-12-23', '2015-12-26')
+    plt.plot(actuals.loc[christmas_period].index,
+             actuals.loc[christmas_period, 'X'],
+             label='Actual Values',
+             color='blue', linewidth=2)
+    plt.plot(forecasts.loc[christmas_period].index,
+             forecasts.loc[christmas_period],
+             label='SARIMAX Forecasts',
+             color='red', linewidth=2, linestyle='--')
+
+    plt.title('Christmas Period 2015 (Dec 23-26)')
+    plt.xlabel('Date')
+    plt.ylabel('Traffic Congestion')
+    plt.legend()
+    plt.grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
+    # Calculate and print statistics
+    print("\nError Metrics for December 2015:")
+    rmse = np.sqrt(mean_squared_error(actuals['X'], forecasts))
+    mae = mean_absolute_error(actuals['X'], forecasts)
+    print(f"RMSE: {rmse:.4f}")
+    print(f"MAE: {mae:.4f}")
+
+    # Analyze Christmas period specifically
+    christmas_eve = slice('2015-12-24 18:00:00', '2015-12-25 06:00:00')
+    normal_days = actuals.index.difference(actuals.loc[christmas_eve].index)
+
+    print("\nAverage Values During Christmas Eve Night (18:00-06:00):")
+    print(f"Actual: {actuals.loc[christmas_eve, 'X'].mean():.4f}")
+    print(f"Forecast: {forecasts.loc[christmas_eve].mean():.4f}")
+
+    print("\nAverage Values During Other Times:")
+    print(f"Actual: {actuals.loc[normal_days, 'X'].mean():.4f}")
+    print(f"Forecast: {forecasts.loc[normal_days].mean():.4f}")
+
+# Execute the analysis
+analyze_2015_holiday_effect(dec_2015_forecasts, actual_dec_2015)
+
+# Cell 65 - Calculate Christmas Daytime Effect
+def calculate_christmas_daytime_effect():
+    """
+    Calculate the ratio of actual to predicted traffic during Christmas daytime hours
+    """
+    # Define Christmas daytime periods (8:00-20:00 on Dec 24 and 25)
+    christmas_day1 = slice('2015-12-24 08:00:00', '2015-12-24 20:00:00')
+    christmas_day2 = slice('2015-12-25 08:00:00', '2015-12-25 20:00:00')
+
+    # Calculate average ratios during daytime hours
+    ratio_day1 = actual_dec_2015.loc[christmas_day1, 'X'].mean() / dec_2015_forecasts.loc[christmas_day1].mean()
+    ratio_day2 = actual_dec_2015.loc[christmas_day2, 'X'].mean() / dec_2015_forecasts.loc[christmas_day2].mean()
+
+    # Average ratio across both days
+    christmas_daytime_ratio = (ratio_day1 + ratio_day2) / 2
+
+    print("\nChristmas Daytime Traffic Analysis (8:00-20:00):")
+    print(f"Dec 24 Ratio (Actual/Predicted): {ratio_day1:.4f}")
+    print(f"Dec 25 Ratio (Actual/Predicted): {ratio_day2:.4f}")
+    print(f"Average Christmas Daytime Ratio: {christmas_daytime_ratio:.4f}")
+
+    return christmas_daytime_ratio
+
+# Calculate and store the ratio for later use
+christmas_daytime_ratio = calculate_christmas_daytime_effect()
+
+# Cell 66 - Train Full SARIMAX Model (2015-2016)
+def train_full_sarimax():
+    """
+    Train SARIMAX model on data from January 2015 to November 2016
+    """
+    print("Training Full SARIMAX model (2015-2016)...")
+
+    # Get training data (Jan 2015 - Nov 2016)
+    train_data = df['2015-01-01':'2016-11-30 23:00:00'].copy()
+    print(f"Training period: {train_data.index.min()} to {train_data.index.max()}")
+
+    # Prepare target variable
+    y = train_data['X'].astype(float)
+
+    # Create features (only day_sin)
+    exog = create_2015_features(train_data.index)  # We can reuse this function as it only creates day_sin
+    print(f"Features included: {exog.columns.tolist()}")
+
+    try:
+        # Fit model
+        model = ARIMA(y,
+                     order=(2, 1, 2),
+                     seasonal_order=(1, 1, 1, 24),
+                     exog=exog,
+                     enforce_stationarity=False,
+                     enforce_invertibility=True)
+
+        results = model.fit()
+        print("\nModel Summary:")
+        print(results.summary())
+
+        return results
+
+    except Exception as e:
+        print(f"Error fitting model: {str(e)}")
+        raise
+
+# Train the model
+sarimax_full = train_full_sarimax()
+
+# Cell 67 - Generate December 2016 Forecasts with Christmas Effect
+def forecast_december_2016_with_christmas():
+    """
+    Generate forecasts for December 2016, incorporating the Christmas daytime effect
+    """
+    print("Generating December 2016 forecasts...")
+
+    # Create forecast dates
+    forecast_dates = pd.date_range(
+        start='2016-12-01',
+        end='2016-12-31 23:00:00',
+        freq='H'
+    )
+
+    # Create features for forecast period
+    exog_forecast = create_2015_features(forecast_dates)
+
+    # Generate initial forecasts and confidence intervals
+    forecasts = sarimax_full.forecast(steps=744, exog=exog_forecast)
+    conf_int = sarimax_full.get_forecast(steps=744, exog=exog_forecast).conf_int()
+
+    # Apply Christmas effect to daytime hours (8:00-20:00) on Dec 24 and 25
+    christmas_mask = (
+        ((forecast_dates.day == 24) | (forecast_dates.day == 25)) &
+        (forecast_dates.hour >= 8) &
+        (forecast_dates.hour <= 20)
+    )
+
+    # Adjust forecasts and confidence intervals during Christmas daytime
+    forecasts[christmas_mask] *= christmas_daytime_ratio
+    conf_int.loc[christmas_mask] *= christmas_daytime_ratio
+
+    # Ensure non-negative values
+    forecasts = np.maximum(forecasts, 0)
+    conf_int = np.maximum(conf_int, 0)
+
+    # Create forecast DataFrame
+    forecast_df = pd.DataFrame({
+        'DateTime': forecast_dates,
+        'SARIMAX': forecasts,
+        'lower': conf_int.iloc[:, 0],
+        'upper': conf_int.iloc[:, 1]
+    })
+
+    # Save forecasts
+    forecast_df.to_csv('sarimax_forecasts_2.csv', index=False)
+    print("Forecasts saved to 'sarimax_forecasts_2.csv'")
+
+    return forecast_df
+
+# Generate forecasts
+dec_2016_forecasts = forecast_december_2016_with_christmas()
+
+# Cell 68 - Plot Forecasts (Without Solution)
+def plot_forecasts_only():
+    """
+    Plot November 2016 actuals and December 2016 forecasts with confidence interval
+    """
+    plt.figure(figsize=(15, 8))
+
+    # Get November data
+    november_data = df['2016-11-01':'2016-11-30 23:00:00']
+
+    # Plot November actual values
+    plt.plot(november_data.index, november_data['X'],
+             label='November 2016 (Actual)',
+             color='blue', linewidth=2)
+
+    # Plot December forecasts
+    plt.plot(dec_2016_forecasts['DateTime'], dec_2016_forecasts['SARIMAX'],
+             label='December 2016 (Forecast)',
+             color='red', linewidth=2, linestyle='--')
+
+    # Add confidence intervals
+    plt.fill_between(dec_2016_forecasts['DateTime'],
+                    dec_2016_forecasts['lower'],
+                    dec_2016_forecasts['upper'],
+                    color='red', alpha=0.2,
+                    label='95% Confidence Interval')
+
+    plt.title('Traffic Congestion: November 2016 (Actual) vs December 2016 (Forecast)')
+    plt.xlabel('Date')
+    plt.ylabel('Traffic Congestion')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+# Create first plot
+plot_forecasts_only()
+
+# Cell 69 - Plot Forecasts with Solution
+def plot_forecasts_with_solution():
+    """
+    Plot November 2016 actuals, December 2016 forecasts, and December 2016 actual values
+    """
+    # Read solution data
+    solution = pd.read_csv('solution/t2_solution.csv')
+    solution['DateTime'] = pd.to_datetime(solution['DateTime'])
+
+    plt.figure(figsize=(15, 8))
+
+    # Get November data
+    november_data = df['2016-11-01':'2016-11-30 23:00:00']
+
+    # Plot November actual values
+    plt.plot(november_data.index, november_data['X'],
+             label='November 2016 (Actual)',
+             color='blue', linewidth=2)
+
+    # Plot December forecasts
+    plt.plot(dec_2016_forecasts['DateTime'], dec_2016_forecasts['SARIMAX'],
+             label='December 2016 (Forecast)',
+             color='red', linewidth=2, linestyle='--')
+
+    # Plot December actual values
+    plt.plot(solution['DateTime'], solution['X'],
+             label='December 2016 (Actual)',
+             color='green', linewidth=2)
+
+    plt.title('Traffic Congestion: November 2016 (Actual) vs December 2016 (Forecast & Actual)')
+    plt.xlabel('Date')
+    plt.ylabel('Traffic Congestion')
+    plt.legend()
+    plt.grid(True)
+
+    # Calculate error metrics
+    rmse = np.sqrt(mean_squared_error(solution['X'], dec_2016_forecasts['SARIMAX']))
+    mae = mean_absolute_error(solution['X'], dec_2016_forecasts['SARIMAX'])
+    mape = np.mean(np.abs((solution['X'] - dec_2016_forecasts['SARIMAX']) / solution['X'])) * 100
+
+    # Add metrics text box
+    metrics_text = f'December Forecast Metrics:\nRMSE: {rmse:.4f}\nMAE: {mae:.4f}\nMAPE: {mape:.2f}%'
+    plt.text(0.02, 0.98, metrics_text,
+             transform=plt.gca().transAxes,
+             verticalalignment='top',
+             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+    plt.tight_layout()
+    plt.show()
+
+# Create second plot
+plot_forecasts_with_solution()
+
+"""# UCM 2"""
+
+# Cell 70 - New UCM Model Training (2015-2016)
+def train_new_ucm():
+    """
+    Train UCM model with daily and weekly seasonality on data from Jan 2015 to Nov 2016
+    """
+    print("Training new UCM model (2015-2016)...")
+
+    # Get training data
+    train_data = df['2015-01-01':'2016-11-30 23:00:00'].copy()
+    print(f"Training period: {train_data.index.min()} to {train_data.index.max()}")
+
+    # Create features for weekly pattern (we'll use only day_sin for now)
+    exog = create_2015_features(train_data.index)
+
+    try:
+        # Specify and fit UCM with:
+        # - Local level
+        # - Daily seasonality (24 hours)
+        # - Weekly pattern through exog variable
+        model = UnobservedComponents(
+            train_data['X'],
+            exog=exog,
+            level='local level',
+            seasonal=24,          # Daily seasonality
+            stochastic_seasonal=True,
+            irregular=True
+        )
+
+        results = model.fit()
+        print("\nModel Summary:")
+        print(results.summary())
+
+        return results
+
+    except Exception as e:
+        print(f"Error fitting model: {str(e)}")
+        raise
+
+# Train the model
+ucm_full = train_new_ucm()
+
+# Cell 71 - Generate UCM Forecasts with Christmas Effect
+def forecast_december_2016_ucm():
+    """
+    Generate UCM forecasts for December 2016, incorporating the Christmas daytime effect
+    """
+    print("Generating December 2016 UCM forecasts...")
+
+    # Create forecast dates
+    forecast_dates = pd.date_range(
+        start='2016-12-01',
+        end='2016-12-31 23:00:00',
+        freq='H'
+    )
+
+    # Create features for forecast period
+    exog_forecast = create_2015_features(forecast_dates)
+
+    # Generate initial forecasts
+    forecasts = ucm_full.forecast(steps=744, exog=exog_forecast)
+
+    # Get prediction intervals (you might need to adjust the alpha for different confidence levels)
+    pred_int = ucm_full.get_prediction(start=len(ucm_full.model.data.orig_endog),
+                                     end=len(ucm_full.model.data.orig_endog) + 743,
+                                     exog=exog_forecast).conf_int()
+
+    # Apply Christmas effect to daytime hours (8:00-20:00) on Dec 24 and 25
+    christmas_mask = (
+        ((forecast_dates.day == 24) | (forecast_dates.day == 25)) &
+        (forecast_dates.hour >= 8) &
+        (forecast_dates.hour <= 20)
+    )
+
+    # Adjust forecasts and confidence intervals during Christmas daytime
+    forecasts[christmas_mask] *= christmas_daytime_ratio
+    pred_int.loc[christmas_mask] *= christmas_daytime_ratio
+
+    # Ensure non-negative values
+    forecasts = np.maximum(forecasts, 0)
+    pred_int = np.maximum(pred_int, 0)
+
+    # Create forecast DataFrame
+    forecast_df = pd.DataFrame({
+        'DateTime': forecast_dates,
+        'UCM': forecasts,
+        'lower': pred_int.iloc[:, 0],
+        'upper': pred_int.iloc[:, 1]
+    })
+
+    # Save forecasts
+    forecast_df.to_csv('ucm_forecasts_2.csv', index=False)
+    print("Forecasts saved to 'ucm_forecasts_2.csv'")
+
+    return forecast_df
+
+# Generate forecasts
+dec_2016_ucm_forecasts = forecast_december_2016_ucm()
+
+# Cell 72 - Plot UCM Forecasts (Without Solution)
+def plot_ucm_forecasts_only():
+    """
+    Plot November 2016 actuals and December 2016 UCM forecasts with confidence interval
+    """
+    plt.figure(figsize=(15, 8))
+
+    # Get November data
+    november_data = df['2016-11-01':'2016-11-30 23:00:00']
+
+    # Plot November actual values
+    plt.plot(november_data.index, november_data['X'],
+             label='November 2016 (Actual)',
+             color='blue', linewidth=2)
+
+    # Plot December forecasts
+    plt.plot(dec_2016_ucm_forecasts['DateTime'], dec_2016_ucm_forecasts['UCM'],
+             label='December 2016 (UCM Forecast)',
+             color='red', linewidth=2, linestyle='--')
+
+    # Add confidence intervals
+    plt.fill_between(dec_2016_ucm_forecasts['DateTime'],
+                    dec_2016_ucm_forecasts['lower'],
+                    dec_2016_ucm_forecasts['upper'],
+                    color='red', alpha=0.2,
+                    label='95% Confidence Interval')
+
+    plt.title('Traffic Congestion: November 2016 (Actual) vs December 2016 (UCM Forecast)')
+    plt.xlabel('Date')
+    plt.ylabel('Traffic Congestion')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+# Create first plot
+plot_ucm_forecasts_only()
+
+# Cell 73 - Plot UCM Forecasts with Solution
+def plot_ucm_forecasts_with_solution():
+    """
+    Plot November 2016 actuals, December 2016 UCM forecasts, and December 2016 actual values
+    """
+    # Read solution data
+    solution = pd.read_csv('solution/t2_solution.csv')
+    solution['DateTime'] = pd.to_datetime(solution['DateTime'])
+
+    plt.figure(figsize=(15, 8))
+
+    # Get November data
+    november_data = df['2016-11-01':'2016-11-30 23:00:00']
+
+    # Plot November actual values
+    plt.plot(november_data.index, november_data['X'],
+             label='November 2016 (Actual)',
+             color='blue', linewidth=2)
+
+    # Plot December forecasts
+    plt.plot(dec_2016_ucm_forecasts['DateTime'], dec_2016_ucm_forecasts['UCM'],
+             label='December 2016 (UCM Forecast)',
+             color='red', linewidth=2, linestyle='--')
+
+    # Plot December actual values
+    plt.plot(solution['DateTime'], solution['X'],
+             label='December 2016 (Actual)',
+             color='green', linewidth=2)
+
+    plt.title('Traffic Congestion: November 2016 (Actual) vs December 2016 (UCM Forecast & Actual)')
+    plt.xlabel('Date')
+    plt.ylabel('Traffic Congestion')
+    plt.legend()
+    plt.grid(True)
+
+    # Calculate error metrics
+    rmse = np.sqrt(mean_squared_error(solution['X'], dec_2016_ucm_forecasts['UCM']))
+    mae = mean_absolute_error(solution['X'], dec_2016_ucm_forecasts['UCM'])
+    mape = np.mean(np.abs((solution['X'] - dec_2016_ucm_forecasts['UCM']) / solution['X'])) * 100
+
+    # Add metrics text box
+    metrics_text = f'December Forecast Metrics:\nRMSE: {rmse:.4f}\nMAE: {mae:.4f}\nMAPE: {mape:.2f}%'
+    plt.text(0.02, 0.98, metrics_text,
+             transform=plt.gca().transAxes,
+             verticalalignment='top',
+             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+    plt.tight_layout()
+    plt.show()
+
+# Create second plot
+plot_ucm_forecasts_with_solution()
+
+"""## BOTH with SUPERSINE"""
+
+# Cell 74 - Updated Feature Creation with Amplified day_sin
+def create_amplified_features(dates, amplitude_factor=3.0):  # We can adjust this factor
+    """
+    Create features with an amplified day_sin effect
+    """
+    features = pd.DataFrame(index=dates)
+
+    # Day of week (0-6) as sine feature with Wednesday peak, now amplified
+    days = 7
+    phase_shift = 2 * np.pi * 2/7  # 2 days shift for Wednesday peak
+    features['day_sin'] = amplitude_factor * np.sin(2 * np.pi * dates.dayofweek/days + phase_shift)
+
+    return features
+
+# Let's retrain both models with amplified features
+print("Retraining models with amplified weekly pattern...")
+
+# Retrain SARIMAX
+sarimax_full = train_full_sarimax()  # This will now use the amplified features
+
+# Retrain UCM
+ucm_full = train_new_ucm()  # This will now use the amplified features
+
+# Generate new forecasts for both models
+print("\nGenerating new forecasts with amplified weekly pattern...")
+
+# SARIMAX forecasts
+dec_2016_forecasts = forecast_december_2016_with_christmas()
+plot_forecasts_only()
+plot_forecasts_with_solution()
+
+# UCM forecasts
+dec_2016_ucm_forecasts = forecast_december_2016_ucm()
+plot_ucm_forecasts_only()
+plot_ucm_forecasts_with_solution()
+
+# Cell 76 - Updated Feature Creation with Proper Weekly Pattern
+def create_weekly_features(dates):
+    """
+    Create proper weekly seasonal features
+    """
+    features = pd.DataFrame(index=dates)
+
+    # Create both sine and cosine components for weekly pattern
+    days = 7
+    phase_shift = 2 * np.pi * 2/7  # 2 days shift for Wednesday peak
+    features['week_sin'] = np.sin(2 * np.pi * dates.dayofweek/days + phase_shift)
+    features['week_cos'] = np.cos(2 * np.pi * dates.dayofweek/days + phase_shift)
+
+    return features
+
+def train_enhanced_sarimax():
+    """
+    Train SARIMAX with enhanced weekly pattern
+    """
+    print("Training enhanced SARIMAX model...")
+
+    # Get training data
+    train_data = df['2015-01-01':'2016-11-30 23:00:00'].copy()
+
+    # Create enhanced features
+    exog = create_weekly_features(train_data.index)
+
+    # Fit model
+    model = ARIMA(train_data['X'],
+                  order=(2, 1, 2),
+                  seasonal_order=(1, 1, 1, 24),  # Daily seasonality
+                  exog=exog,                     # Weekly pattern through sine/cosine
+                  enforce_stationarity=False,
+                  enforce_invertibility=True)
+
+    results = model.fit()
+    print("\nModel Summary:")
+    print(results.summary())
+
+    return results
+
+"""# UCM 3 - with DUMMY"""
+
+# Cell 77 - UCM with Dummy Variables for Hour and Day
+def create_dummy_features(dates):
+    """
+    Create dummy variables for both hour of day and day of week
+    """
+    # Initialize DataFrame
+    features = pd.DataFrame(index=dates)
+
+    # Create hour dummies (0-23)
+    for hour in range(23):  # We'll create 23 dummies (the 24th is the reference)
+        features[f'hour_{hour}'] = (dates.hour == hour).astype(int)
+
+    # Create day dummies (0-6, Monday=0)
+    for day in range(6):  # We'll create 6 dummies (the 7th is the reference)
+        features[f'day_{day}'] = (dates.dayofweek == day).astype(int)
+
+    return features
+
+def train_ucm_with_dummies():
+    """
+    Train UCM model using dummy variables for both daily and weekly patterns
+    """
+    print("Training UCM model with hour and day dummies...")
+
+    # Get training data (Jan 2015 - Nov 2016)
+    train_data = df['2015-01-01':'2016-11-30 23:00:00'].copy()
+    print(f"Training period: {train_data.index.min()} to {train_data.index.max()}")
+
+    # Create dummy features
+    features = create_dummy_features(train_data.index)
+    print(f"Created {len(features.columns)} dummy variables")
+
+    try:
+        # Specify UCM with dummy variables as exogenous regressors
+        model = UnobservedComponents(
+            endog=train_data['X'],
+            level='local level',
+            exog=features,
+            irregular=True
+        )
+
+        results = model.fit()
+        print("\nModel Summary:")
+        print(results.summary())
+
+        return results, features.columns.tolist()
+
+    except Exception as e:
+        print(f"Error fitting model: {str(e)}")
+        raise
+
+# Train the model
+ucm_dummy, feature_names = train_ucm_with_dummies()
+
+# Cell 78 - Generate Forecasts with Dummy Variables
+def generate_ucm_dummy_forecasts(model, feature_names):
+    """
+    Generate UCM forecasts for December 2016 using dummy variables
+    """
+    print("Generating December 2016 forecasts...")
+
+    # Create forecast dates
+    forecast_dates = pd.date_range(
+        start='2016-12-01',
+        end='2016-12-31 23:00:00',
+        freq='H'
+    )
+
+    # Create dummy features for forecast period
+    features = create_dummy_features(forecast_dates)
+
+    # Generate forecasts
+    forecasts = model.forecast(steps=744, exog=features)
+
+    # Get prediction intervals
+    pred_int = model.get_forecast(
+        steps=744,
+        exog=features
+    ).conf_int()
+
+    # Ensure non-negative values
+    forecasts = np.maximum(forecasts, 0)
+    pred_int = np.maximum(pred_int, 0)
+
+    # Create forecast DataFrame
+    forecast_df = pd.DataFrame({
+        'DateTime': forecast_dates,
+        'UCM': forecasts,
+        'lower': pred_int.iloc[:, 0],
+        'upper': pred_int.iloc[:, 1]
+    })
+
+    # Save forecasts
+    forecast_df.to_csv('ucm_dummy_forecasts.csv', index=False)
+    print("Forecasts saved to 'ucm_dummy_forecasts.csv'")
+
+    return forecast_df
+
+# Generate forecasts
+dummy_forecasts = generate_ucm_dummy_forecasts(ucm_dummy, feature_names)
+
+# Cell 79 - Plot Results (remains the same as before)
+def plot_ucm_results():
+    """
+    Create two plots:
+    1. November 2016 + December 2016 forecasts
+    2. November 2016 + December 2016 forecasts + December 2016 actual values
+    """
+    # Plot 1: Without solution
+    plt.figure(figsize=(15, 8))
+
+    # Get November data
+    november_data = df['2016-11-01':'2016-11-30 23:00:00']
+
+    # Plot November actual values
+    plt.plot(november_data.index, november_data['X'],
+             label='November 2016 (Actual)',
+             color='blue', linewidth=2)
+
+    # Plot December forecasts
+    plt.plot(dummy_forecasts['DateTime'], dummy_forecasts['UCM'],
+             label='December 2016 (UCM Forecast)',
+             color='red', linewidth=2, linestyle='--')
+
+    # Add confidence intervals
+    plt.fill_between(dummy_forecasts['DateTime'],
+                    dummy_forecasts['lower'],
+                    dummy_forecasts['upper'],
+                    color='red', alpha=0.2,
+                    label='95% Confidence Interval')
+
+    plt.title('Traffic Congestion: November 2016 (Actual) vs December 2016 (UCM Forecast)')
+    plt.xlabel('Date')
+    plt.ylabel('Traffic Congestion')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+    # Plot 2: With solution
+    plt.figure(figsize=(15, 8))
+
+    # Read solution data
+    solution = pd.read_csv('solution/t2_solution.csv')
+    solution['DateTime'] = pd.to_datetime(solution['DateTime'])
+
+    # Plot November actual values
+    plt.plot(november_data.index, november_data['X'],
+             label='November 2016 (Actual)',
+             color='blue', linewidth=2)
+
+    # Plot December forecasts
+    plt.plot(dummy_forecasts['DateTime'], dummy_forecasts['UCM'],
+             label='December 2016 (UCM Forecast)',
+             color='red', linewidth=2, linestyle='--')
+
+    # Plot December actual values
+    plt.plot(solution['DateTime'], solution['X'],
+             label='December 2016 (Actual)',
+             color='green', linewidth=2)
+
+    # Calculate error metrics
+    rmse = np.sqrt(mean_squared_error(solution['X'], dummy_forecasts['UCM']))
+    mae = mean_absolute_error(solution['X'], dummy_forecasts['UCM'])
+    mape = np.mean(np.abs((solution['X'] - dummy_forecasts['UCM']) / solution['X'])) * 100
+
+    # Add metrics text box
+    metrics_text = f'December Forecast Metrics:\nRMSE: {rmse:.4f}\nMAE: {mae:.4f}\nMAPE: {mape:.2f}%'
+    plt.text(0.02, 0.98, metrics_text,
+             transform=plt.gca().transAxes,
+             verticalalignment='top',
+             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+    plt.title('Traffic Congestion: November 2016 (Actual) vs December 2016 (UCM Forecast & Actual)')
+    plt.xlabel('Date')
+    plt.ylabel('Traffic Congestion')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+# Create visualizations
+plot_ucm_results()
+
+# Cell 80 - Create Refined Dummy Features (ONLY significant hours)
+def create_refined_features(dates):
+    """
+    Create refined features based on significance analysis:
+    - Only significant hour dummies (5-14)
+    """
+    features = pd.DataFrame(index=dates)
+
+    # Create hour dummies only for significant hours (5-14)
+    for hour in range(5, 15):
+        features[f'hour_{hour}'] = (dates.hour == hour).astype(int)
+
+    return features
+
+def train_refined_ucm():
+    """
+    Train refined UCM model with only significant hour dummies
+    """
+    print("Training refined UCM model...")
+
+    # Get training data
+    train_data = df['2015-01-01':'2016-11-30 23:00:00'].copy()
+    print(f"Training period: {train_data.index.min()} to {train_data.index.max()}")
+
+    # Create refined features
+    features = create_refined_features(train_data.index)
+    print(f"Created {len(features.columns)} features")
+
+    try:
+        model = UnobservedComponents(
+            endog=train_data['X'],
+            level='local level',
+            exog=features,
+            irregular=True
+        )
+
+        results = model.fit()
+        print("\nModel Summary:")
+        print(results.summary())
+
+        return results, features.columns.tolist()
+
+    except Exception as e:
+        print(f"Error fitting model: {str(e)}")
+        raise
+
+# Train the refined model
+ucm_refined, refined_features = train_refined_ucm()
+
+# Cell 81 - Generate Forecasts with Refined Model
+def generate_refined_forecasts(model, feature_names):
+    """
+    Generate forecasts using the refined UCM model
+    """
+    print("Generating December 2016 forecasts...")
+
+    # Create forecast dates
+    forecast_dates = pd.date_range(
+        start='2016-12-01',
+        end='2016-12-31 23:00:00',
+        freq='H'
+    )
+
+    # Create features for forecast period
+    features = create_refined_features(forecast_dates)
+
+    # Generate forecasts
+    forecasts = model.forecast(steps=744, exog=features)
+
+    # Get prediction intervals
+    pred_int = model.get_forecast(
+        steps=744,
+        exog=features
+    ).conf_int()
+
+    # Ensure non-negative values
+    forecasts = np.maximum(forecasts, 0)
+    pred_int = np.maximum(pred_int, 0)
+
+    # Create forecast DataFrame
+    forecast_df = pd.DataFrame({
+        'DateTime': forecast_dates,
+        'UCM': forecasts,
+        'lower': pred_int.iloc[:, 0],
+        'upper': pred_int.iloc[:, 1]
+    })
+
+    # Save forecasts
+    forecast_df.to_csv('ucm_refined_forecasts.csv', index=False)
+    print("Forecasts saved to 'ucm_refined_forecasts.csv'")
+
+    return forecast_df
+
+# Generate forecasts with refined model
+refined_forecasts = generate_refined_forecasts(ucm_refined, refined_features)
+
+# Cell 82 - Plot Refined UCM Results
+def plot_refined_model():
+    """
+    Plot refined UCM model results
+    """
+    # Read solution data
+    solution = pd.read_csv('solution/t2_solution.csv')
+    solution['DateTime'] = pd.to_datetime(solution['DateTime'])
+
+    # Get November data
+    november_data = df['2016-11-01':'2016-11-30 23:00:00']
+
+    plt.figure(figsize=(15, 10))
+
+    # Plot data
+    plt.plot(november_data.index, november_data['X'],
+             label='November 2016 (Actual)',
+             color='blue', linewidth=2)
+
+    plt.plot(refined_forecasts['DateTime'], refined_forecasts['UCM'],
+             label='Refined UCM Forecast',
+             color='red', linewidth=2, linestyle='--')
+
+    plt.plot(solution['DateTime'], solution['X'],
+             label='December 2016 (Actual)',
+             color='green', linewidth=2)
+
+    # Calculate metrics
+    rmse = np.sqrt(mean_squared_error(solution['X'], refined_forecasts['UCM']))
+    mae = mean_absolute_error(solution['X'], refined_forecasts['UCM'])
+    mape = np.mean(np.abs((solution['X'] - refined_forecasts['UCM']) / solution['X'])) * 100
+
+    # Add metrics text box
+    metrics_text = f'December Forecast Metrics:\nRMSE: {rmse:.4f}\nMAE: {mae:.4f}\nMAPE: {mape:.2f}%'
+    plt.text(0.02, 0.98, metrics_text,
+             transform=plt.gca().transAxes,
+             verticalalignment='top',
+             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+    plt.title('Traffic Congestion: November 2016 (Actual) vs December 2016 (Refined UCM)')
+    plt.xlabel('Date')
+    plt.ylabel('Traffic Congestion')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+# Create plot
+plot_refined_model()
+
+"""# FINAL MODELS WITH DAMPENING CHRISTMAS!"""
+
+# Cell 83 - Import Required Libraries for Final Analysis
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+from datetime import datetime
+import matplotlib.dates as mdates
+
+# Cell 84 - Helper Function for Christmas Dampening
+def apply_christmas_dampening(df):
+    """
+    Apply dampening effect to Christmas peak hours (24th and 25th, 06:00-15:00)
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with 'DateTime' column and forecast values
+
+    Returns:
+    --------
+    pd.DataFrame
+        DataFrame with dampened forecasts
+    """
+    df = df.copy()
+    forecast_columns = [col for col in df.columns if col != 'DateTime']
+
+    # Convert DateTime to datetime if it's not already
+    if not pd.api.types.is_datetime64_any_dtype(df['DateTime']):
+        df['DateTime'] = pd.to_datetime(df['DateTime'])
+
+    # Create mask for Christmas hours (24th and 25th, 06:00-15:00)
+    christmas_mask = (
+        ((df['DateTime'].dt.day == 24) | (df['DateTime'].dt.day == 25)) &
+        (df['DateTime'].dt.hour >= 6) &
+        (df['DateTime'].dt.hour <= 15)
+    )
+
+    # Apply dampening
+    for col in forecast_columns:
+        df.loc[christmas_mask, col] = df.loc[christmas_mask, col] * 0.55
+
+    return df
+
+# Cell 85 - Prepare Final Submission File
+def prepare_final_submission():
+    """
+    Prepare final submission file combining ARIMA, UCM, and ML forecasts
+    with Christmas dampening effect
+    """
+    print("Preparing final submission file...")
+
+    # Read individual forecast files
+    arima = pd.read_csv('sarimax_forecasts_2.csv')
+    ucm = pd.read_csv('ucm_refined_forecasts.csv')
+    ml = pd.read_csv('xgboost_december_forecasts.csv')
+
+    # Create submission DataFrame with DateTime index
+    submission = pd.DataFrame()
+    submission['DateTime'] = pd.date_range(
+        start='2016-12-01',
+        end='2016-12-31 23:00:00',
+        freq='H'
+    )
+
+    # Add forecasts
+    submission['ARIMA'] = arima['SARIMAX']
+    submission['UCM'] = ucm['UCM']
+    submission['ML'] = ml['XGB_forecast']
+
+    # Apply Christmas dampening to ARIMA and UCM only
+    submission_damped = submission.copy()
+    submission_damped['ARIMA'] = submission['ARIMA']
+    submission_damped['UCM'] = submission['UCM']
+    submission_damped = apply_christmas_dampening(submission_damped[['DateTime', 'ARIMA', 'UCM']])
+
+    # Combine dampened ARIMA/UCM with original ML
+    submission_final = pd.DataFrame()
+    submission_final['DateTime'] = submission['DateTime']
+    submission_final['ARIMA'] = submission_damped['ARIMA']
+    submission_final['UCM'] = submission_damped['UCM']
+    submission_final['ML'] = submission['ML']
+
+    # Create filename with current date
+    filename = f'902064_{datetime.now().strftime("%Y%m%d")}.csv'
+
+    # Save submission file
+    submission_final.to_csv(filename, index=False)
+    print(f"Submission file saved as {filename}")
+
+    return submission_final
+
+# Cell 86 - Plot Model Comparisons
+def plot_model_comparisons_basic(submission_df):
+    """
+    Create basic comparison plot between all models
+    """
+    plt.figure(figsize=(15, 8))
+    colors = {'ARIMA': '#1f77b4', 'UCM': '#ff7f0e', 'ML': '#2ca02c'}
+
+    for model in ['ARIMA', 'UCM', 'ML']:
+        plt.plot(pd.to_datetime(submission_df['DateTime']),
+                submission_df[model],
+                label=f'{model} Forecast',
+                color=colors[model],
+                linewidth=2)
+
+    plt.title('December 2016 Forecasts Comparison')
+    plt.xlabel('Date')
+    plt.ylabel('Traffic Congestion')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+# Cell 87 - Plot Model vs Solution Comparisons
+def plot_model_vs_solution(submission_df, solution_path='solution/t2_solution.csv'):
+    """
+    Create individual comparison plots for each model against solution
+    """
+    # Read solution data
+    solution = pd.read_csv(solution_path)
+    solution['DateTime'] = pd.to_datetime(solution['DateTime'])
+
+    colors = {'ARIMA': '#1f77b4', 'UCM': '#ff7f0e', 'ML': '#2ca02c'}
+    fig, axes = plt.subplots(3, 1, figsize=(15, 15))
+
+    for idx, model in enumerate(['ARIMA', 'UCM', 'ML']):
+        axes[idx].plot(pd.to_datetime(submission_df['DateTime']),
+                      submission_df[model],
+                      label=f'{model} Forecast',
+                      color=colors[model],
+                      linewidth=2)
+
+        axes[idx].plot(pd.to_datetime(solution['DateTime']),
+                      solution['X'],
+                      label='Actual Values',
+                      color='gray',
+                      linestyle='--',
+                      linewidth=2)
+
+        # Calculate error metrics
+        rmse = np.sqrt(mean_squared_error(solution['X'], submission_df[model]))
+        mae = mean_absolute_error(solution['X'], submission_df[model])
+        mape = np.mean(np.abs((solution['X'] - submission_df[model]) / solution['X'])) * 100
+
+        # Add metrics text
+        metrics_text = f'RMSE: {rmse:.4f}\nMAE: {mae:.4f}\nMAPE: {mape:.2f}%'
+        axes[idx].text(0.02, 0.95, metrics_text,
+                      transform=axes[idx].transAxes,
+                      verticalalignment='top',
+                      bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+        axes[idx].set_title(f'{model} Forecast vs Actual Values')
+        axes[idx].set_xlabel('Date')
+        axes[idx].set_ylabel('Traffic Congestion')
+        axes[idx].legend()
+        axes[idx].grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
+# Cell 88 - Print Model Performance Metrics
+def print_model_metrics(submission_df, solution_path='solution/t2_solution.csv'):
+    """
+    Print comprehensive error metrics for all models
+    """
+    solution = pd.read_csv(solution_path)
+
+    print("\nModel Performance Metrics:")
+    print("\nRoot Mean Square Error (RMSE):")
+    for model in ['ARIMA', 'UCM', 'ML']:
+        rmse = np.sqrt(mean_squared_error(solution['X'], submission_df[model]))
+        print(f"{model}: {rmse:.4f}")
+
+    print("\nMean Absolute Error (MAE):")
+    for model in ['ARIMA', 'UCM', 'ML']:
+        mae = mean_absolute_error(solution['X'], submission_df[model])
+        print(f"{model}: {mae:.4f}")
+
+    print("\nMean Absolute Percentage Error (MAPE):")
+    for model in ['ARIMA', 'UCM', 'ML']:
+        mape = np.mean(np.abs((solution['X'] - submission_df[model]) / solution['X'])) * 100
+        print(f"{model}: {mape:.2f}%")
+
+# Cell 89 - Execute Final Analysis Pipeline
+# Generate final submission file
+submission_df = prepare_final_submission()
+
+# Create visualizations
+plot_model_comparisons_basic(submission_df)
+plot_model_vs_solution(submission_df)
+print_model_metrics(submission_df)
+
+# Cell 90 - Plot November-December Transition
+def plot_november_december_transition():
+    """
+    Create three subplots showing November actuals and December forecasts for each model
+    """
+    # Read November 2016 data and handle datetime parsing
+    try:
+        df = pd.read_csv('ts2024.csv')
+        # First try to parse DateTime directly
+        try:
+            df['DateTime'] = pd.to_datetime(df['DateTime'], format='mixed')
+        except:
+            # If that fails, try to construct from Date and Hour
+            df['DateTime'] = pd.to_datetime(df['Date']) + pd.to_timedelta(df['Hour'], unit='h')
+
+        november_data = df[df['DateTime'].between('2016-11-01', '2016-11-30 23:59:59')]
+        print(f"Successfully loaded November data: {len(november_data)} records")
+
+        # Read December forecasts
+        submission_filename = f'902064_{datetime.now().strftime("%Y%m%d")}.csv'
+        submission_df = pd.read_csv(submission_filename)
+        submission_df['DateTime'] = pd.to_datetime(submission_df['DateTime'])
+        print(f"Successfully loaded December forecasts: {len(submission_df)} records")
+
+        # Create figure with three subplots
+        fig, axes = plt.subplots(3, 1, figsize=(15, 12))
+        colors = {'ARIMA': '#1f77b4', 'UCM': '#ff7f0e', 'ML': '#2ca02c'}
+
+        for idx, model in enumerate(['ARIMA', 'UCM', 'ML']):
+            # Plot November actuals
+            axes[idx].plot(november_data['DateTime'], november_data['X'],
+                          label='November 2016 (Actual)',
+                          color='gray',
+                          linewidth=2)
+
+            # Plot December forecasts
+            axes[idx].plot(submission_df['DateTime'], submission_df[model],
+                          label=f'December 2016 ({model} Forecast)',
+                          color=colors[model],
+                          linewidth=2,
+                          linestyle='--')
+
+            # Customize plot
+            axes[idx].set_title(f'{model} Model: November Actuals and December Forecast')
+            axes[idx].set_xlabel('Date')
+            axes[idx].set_ylabel('Traffic Congestion')
+            axes[idx].legend()
+            axes[idx].grid(True, alpha=0.3)
+
+            # Format x-axis
+            axes[idx].xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+            axes[idx].tick_params(axis='x', rotation=45)
+
+            # Add statistics for each period
+            nov_stats = f"November Stats:\nMean: {november_data['X'].mean():.2f}\nStd: {november_data['X'].std():.2f}"
+            dec_stats = f"December Stats:\nMean: {submission_df[model].mean():.2f}\nStd: {submission_df[model].std():.2f}"
+
+            # Add text boxes with statistics
+            axes[idx].text(0.02, 0.98, nov_stats,
+                          transform=axes[idx].transAxes,
+                          verticalalignment='top',
+                          bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.5))
+
+            axes[idx].text(0.98, 0.98, dec_stats,
+                          transform=axes[idx].transAxes,
+                          verticalalignment='top',
+                          horizontalalignment='right',
+                          bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.5))
+
+        plt.tight_layout()
+        plt.show()
+
+    except Exception as e:
+        print(f"Error occurred: {str(e)}")
+        raise
+
+# Execute the plot
+plot_november_december_transition()
+
+# Cell 90 - First, let's inspect our CSV files
+def inspect_forecast_files():
+    """
+    Print the column names and first few rows of each forecast file
+    """
+    print("=== Inspecting Forecast Files ===\n")
+
+    # SARIMAX file
+    print("SARIMAX forecasts file:")
+    arima = pd.read_csv('sarimax_forecasts_2.csv')
+    print("Columns:", arima.columns.tolist())
+    print("\nFirst few rows:")
+    print(arima.head())
+    print("\n" + "="*50 + "\n")
+
+    # UCM file
+    print("UCM forecasts file:")
+    ucm = pd.read_csv('ucm_refined_forecasts.csv')
+    print("Columns:", ucm.columns.tolist())
+    print("\nFirst few rows:")
+    print(ucm.head())
+    print("\n" + "="*50 + "\n")
+
+    # ML file
+    print("ML forecasts file:")
+    ml = pd.read_csv('xgboost_december_forecasts.csv')
+    print("Columns:", ml.columns.tolist())
+    print("\nFirst few rows:")
+    print(ml.head())
+
+# Run the inspection
+inspect_forecast_files()
+
+# Cell 91 - Plot November-December Transition with Confidence Intervals
+def plot_november_december_transition_with_ci():
+    """
+    Create three subplots showing November actuals and December forecasts
+    with confidence intervals for each model
+    """
+    try:
+        # Load November data
+        df = pd.read_csv('ts2024.csv')
+        try:
+            df['DateTime'] = pd.to_datetime(df['DateTime'], format='mixed')
+        except:
+            df['DateTime'] = pd.to_datetime(df['Date']) + pd.to_timedelta(df['Hour'], unit='h')
+
+        november_data = df[df['DateTime'].between('2016-11-01', '2016-11-30 23:59:59')]
+
+        # Load forecasts with confidence intervals
+        arima_forecasts = pd.read_csv('sarimax_forecasts_2.csv')
+        ucm_forecasts = pd.read_csv('ucm_refined_forecasts.csv')
+        ml_forecasts = pd.read_csv('xgboost_december_forecasts.csv')
+
+        # Ensure datetime format for all dataframes
+        arima_forecasts['DateTime'] = pd.to_datetime(arima_forecasts['DateTime'])
+        ucm_forecasts['DateTime'] = pd.to_datetime(ucm_forecasts['DateTime'])
+        ml_forecasts['DateTime'] = pd.to_datetime(ml_forecasts['datetime'])  # Note lowercase
+
+        # Create figure
+        fig, axes = plt.subplots(3, 1, figsize=(15, 15))
+        colors = {'ARIMA': '#1f77b4', 'UCM': '#ff7f0e', 'ML': '#2ca02c'}
+
+        # Plot each model
+        models_info = [
+            {
+                'name': 'ARIMA',
+                'df': arima_forecasts,
+                'forecast_col': 'SARIMAX',
+                'lower_col': 'lower',
+                'upper_col': 'upper'
+            },
+            {
+                'name': 'UCM',
+                'df': ucm_forecasts,
+                'forecast_col': 'UCM',
+                'lower_col': 'lower',
+                'upper_col': 'upper'
+            },
+            {
+                'name': 'ML',
+                'df': ml_forecasts,
+                'forecast_col': 'XGB_forecast',
+                'has_ci': False
+            }
+        ]
+
+        for idx, model_info in enumerate(models_info):
+            # Plot November actuals
+            axes[idx].plot(november_data['DateTime'], november_data['X'],
+                          label='November 2016 (Actual)',
+                          color='gray',
+                          linewidth=2)
+
+            model_df = model_info['df']
+            model_name = model_info['name']
+            forecast_col = model_info['forecast_col']
+
+            # Plot December forecasts
+            axes[idx].plot(model_df['DateTime'],
+                          model_df[forecast_col],
+                          label=f'December 2016 ({model_name} Forecast)',
+                          color=colors[model_name],
+                          linewidth=2)
+
+            # Add confidence intervals
+            if model_info.get('has_ci', True):  # True for ARIMA and UCM
+                axes[idx].fill_between(
+                    model_df['DateTime'],
+                    model_df[model_info['lower_col']],
+                    model_df[model_info['upper_col']],
+                    color=colors[model_name],
+                    alpha=0.2,
+                    label='95% Confidence Interval'
+                )
+            else:  # For ML model
+                std_dev = november_data['X'].std()
+                axes[idx].fill_between(
+                    model_df['DateTime'],
+                    model_df[forecast_col] - 1.96 * std_dev,
+                    model_df[forecast_col] + 1.96 * std_dev,
+                    color=colors[model_name],
+                    alpha=0.2,
+                    label='Approximate 95% Prediction Interval'
+                )
+
+            # Customize plot
+            axes[idx].set_title(f'{model_name} Model: November Actuals and December Forecast')
+            axes[idx].set_xlabel('Date')
+            axes[idx].set_ylabel('Traffic Congestion')
+            axes[idx].legend()
+            axes[idx].grid(True, alpha=0.3)
+
+            # Format x-axis
+            axes[idx].xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+            axes[idx].tick_params(axis='x', rotation=45)
+
+            # Add statistics
+            nov_stats = f"November Stats:\nMean: {november_data['X'].mean():.2f}\nStd: {november_data['X'].std():.2f}"
+            dec_stats = f"December Stats:\nMean: {model_df[forecast_col].mean():.2f}\nStd: {model_df[forecast_col].std():.2f}"
+
+            # Add text boxes
+            axes[idx].text(0.02, 0.98, nov_stats,
+                          transform=axes[idx].transAxes,
+                          verticalalignment='top',
+                          bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.5))
+
+            axes[idx].text(0.98, 0.98, dec_stats,
+                          transform=axes[idx].transAxes,
+                          verticalalignment='top',
+                          horizontalalignment='right',
+                          bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.5))
+
+        plt.tight_layout()
+        plt.show()
+
+    except Exception as e:
+        print(f"Error occurred: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+# Execute the plot
+plot_november_december_transition_with_ci()
+
+# Cell 92 - Apply Christmas Dampening Effect to Forecasts
+def apply_christmas_dampening(df, forecast_col):
+    """
+    Apply dampening effect to Christmas peak hours (24th and 25th, 06:00-15:00)
+    """
+    df = df.copy()
+
+    # Create mask for Christmas hours (24th and 25th, 06:00-15:00)
+    christmas_mask = (
+        (df['DateTime'].dt.day.isin([24, 25])) &
+        (df['DateTime'].dt.hour.between(6, 15))
+    )
+
+    # Apply dampening to forecast
+    df.loc[christmas_mask, forecast_col] *= 0.55
+
+    # If confidence intervals exist, apply dampening to them too
+    if 'lower' in df.columns:
+        df.loc[christmas_mask, 'lower'] *= 0.55
+    if 'upper' in df.columns:
+        df.loc[christmas_mask, 'upper'] *= 0.55
+
+    return df
+
+# Cell 93 - Updated Plot with Christmas Dampening and Bounded Confidence Intervals
+def plot_november_december_transition_with_ci():
+    """
+    Create three subplots showing November actuals and December forecasts
+    with confidence intervals for each model, including Christmas dampening
+    """
+    try:
+        # Load November data
+        df = pd.read_csv('ts2024.csv')
+        try:
+            df['DateTime'] = pd.to_datetime(df['DateTime'], format='mixed')
+        except:
+            df['DateTime'] = pd.to_datetime(df['Date']) + pd.to_timedelta(df['Hour'], unit='h')
+
+        november_data = df[df['DateTime'].between('2016-11-01', '2016-11-30 23:59:59')]
+
+        # Load forecasts and apply Christmas dampening
+        arima_forecasts = pd.read_csv('sarimax_forecasts_2.csv')
+        ucm_forecasts = pd.read_csv('ucm_refined_forecasts.csv')
+        ml_forecasts = pd.read_csv('xgboost_december_forecasts.csv')
+
+        # Ensure datetime format and apply dampening
+        arima_forecasts['DateTime'] = pd.to_datetime(arima_forecasts['DateTime'])
+        ucm_forecasts['DateTime'] = pd.to_datetime(ucm_forecasts['DateTime'])
+        ml_forecasts['DateTime'] = pd.to_datetime(ml_forecasts['datetime'])
+
+        # Apply Christmas dampening to ARIMA and UCM only
+        arima_forecasts = apply_christmas_dampening(arima_forecasts, 'SARIMAX')
+        ucm_forecasts = apply_christmas_dampening(ucm_forecasts, 'UCM')
+
+        # Create figure
+        fig, axes = plt.subplots(3, 1, figsize=(15, 15))
+        colors = {'ARIMA': '#1f77b4', 'UCM': '#ff7f0e', 'ML': '#2ca02c'}
+
+        # Plot each model
+        models_info = [
+            {
+                'name': 'ARIMA',
+                'df': arima_forecasts,
+                'forecast_col': 'SARIMAX',
+                'lower_col': 'lower',
+                'upper_col': 'upper'
+            },
+            {
+                'name': 'UCM',
+                'df': ucm_forecasts,
+                'forecast_col': 'UCM',
+                'lower_col': 'lower',
+                'upper_col': 'upper'
+            },
+            {
+                'name': 'ML',
+                'df': ml_forecasts,
+                'forecast_col': 'XGB_forecast',
+                'has_ci': False
+            }
+        ]
+
+        for idx, model_info in enumerate(models_info):
+            # Plot November actuals
+            axes[idx].plot(november_data['DateTime'], november_data['X'],
+                          label='November 2016 (Actual)',
+                          color='gray',
+                          linewidth=2)
+
+            model_df = model_info['df']
+            model_name = model_info['name']
+            forecast_col = model_info['forecast_col']
+
+            # Plot December forecasts
+            axes[idx].plot(model_df['DateTime'],
+                          model_df[forecast_col],
+                          label=f'December 2016 ({model_name} Forecast)',
+                          color=colors[model_name],
+                          linewidth=2)
+
+            # Add confidence intervals
+            if model_info.get('has_ci', True):  # True for ARIMA and UCM
+                # For UCM, let's bound the confidence intervals
+                if model_name == 'UCM':
+                    # Calculate more reasonable bounds based on historical volatility
+                    historical_std = november_data['X'].std()
+                    upper_bound = model_df[forecast_col] + 2 * historical_std
+                    lower_bound = np.maximum(0, model_df[forecast_col] - 2 * historical_std)
+
+                    axes[idx].fill_between(
+                        model_df['DateTime'],
+                        lower_bound,
+                        upper_bound,
+                        color=colors[model_name],
+                        alpha=0.2,
+                        label='95% Confidence Interval (Bounded)'
+                    )
+                else:  # ARIMA
+                    axes[idx].fill_between(
+                        model_df['DateTime'],
+                        np.maximum(0, model_df[model_info['lower_col']]),
+                        model_df[model_info['upper_col']],
+                        color=colors[model_name],
+                        alpha=0.2,
+                        label='95% Confidence Interval'
+                    )
+            else:  # For ML model
+                std_dev = november_data['X'].std()
+                axes[idx].fill_between(
+                    model_df['DateTime'],
+                    np.maximum(0, model_df[forecast_col] - 1.96 * std_dev),
+                    model_df[forecast_col] + 1.96 * std_dev,
+                    color=colors[model_name],
+                    alpha=0.2,
+                    label='Approximate 95% Prediction Interval'
+                )
+
+            # Customize plot
+            axes[idx].set_title(f'{model_name} Model: November Actuals and December Forecast')
+            axes[idx].set_xlabel('Date')
+            axes[idx].set_ylabel('Traffic Congestion')
+            axes[idx].legend()
+            axes[idx].grid(True, alpha=0.3)
+
+            # Format x-axis
+            axes[idx].xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+            axes[idx].tick_params(axis='x', rotation=45)
+
+            # Add statistics
+            nov_stats = f"November Stats:\nMean: {november_data['X'].mean():.2f}\nStd: {november_data['X'].std():.2f}"
+            dec_stats = f"December Stats:\nMean: {model_df[forecast_col].mean():.2f}\nStd: {model_df[forecast_col].std():.2f}"
+
+            # Add text boxes
+            axes[idx].text(0.02, 0.98, nov_stats,
+                          transform=axes[idx].transAxes,
+                          verticalalignment='top',
+                          bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.5))
+
+            axes[idx].text(0.98, 0.98, dec_stats,
+                          transform=axes[idx].transAxes,
+                          verticalalignment='top',
+                          horizontalalignment='right',
+                          bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.5))
+
+        plt.tight_layout()
+        plt.show()
+
+    except Exception as e:
+        print(f"Error occurred: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+# Execute the plot
+plot_november_december_transition_with_ci()
+
+# Cell 96 - Updated Plot with Complete Code and Using Dampened Values
+def plot_november_december_transition_with_ci():
+    """
+    Create three subplots showing November actuals and December forecasts
+    with corrected confidence intervals for UCM and using dampened values
+    """
+    try:
+        # Load November data
+        df = pd.read_csv('ts2024.csv')
+        try:
+            df['DateTime'] = pd.to_datetime(df['DateTime'], format='mixed')
+        except:
+            df['DateTime'] = pd.to_datetime(df['Date']) + pd.to_timedelta(df['Hour'], unit='h')
+
+        # Set DateTime as index for november_data
+        november_data = df[df['DateTime'].between('2016-11-01', '2016-11-30 23:59:59')].copy()
+        november_data.set_index('DateTime', inplace=True)
+
+        # Use the already dampened forecasts from our submission file
+        submission_filename = f'902064_{datetime.now().strftime("%Y%m%d")}.csv'
+        submission_df = pd.read_csv(submission_filename)
+        submission_df['DateTime'] = pd.to_datetime(submission_df['DateTime'])
+
+        # Read original files for confidence intervals
+        arima_forecasts = pd.read_csv('sarimax_forecasts_2.csv')
+        ucm_forecasts = pd.read_csv('ucm_refined_forecasts.csv')
+
+        # Ensure datetime format
+        arima_forecasts['DateTime'] = pd.to_datetime(arima_forecasts['DateTime'])
+        ucm_forecasts['DateTime'] = pd.to_datetime(ucm_forecasts['DateTime'])
+
+        # Create figure
+        fig, axes = plt.subplots(3, 1, figsize=(15, 15))
+        colors = {'ARIMA': '#1f77b4', 'UCM': '#ff7f0e', 'ML': '#2ca02c'}
+
+        # Plot each model
+        models_info = [
+            {
+                'name': 'ARIMA',
+                'forecast_col': 'ARIMA',
+                'ci_df': arima_forecasts,
+                'lower_col': 'lower',
+                'upper_col': 'upper'
+            },
+            {
+                'name': 'UCM',
+                'forecast_col': 'UCM',
+                'ci_df': ucm_forecasts,
+                'lower_col': 'lower',
+                'upper_col': 'upper'
+            },
+            {
+                'name': 'ML',
+                'forecast_col': 'ML',
+                'has_ci': False
+            }
+        ]
+
+        for idx, model_info in enumerate(models_info):
+            # Plot November actuals
+            axes[idx].plot(november_data.index, november_data['X'],
+                          label='November 2016 (Actual)',
+                          color='gray',
+                          linewidth=2)
+
+            model_name = model_info['name']
+            forecast_col = model_info['forecast_col']
+
+            # Plot December forecasts using dampened values from submission
+            axes[idx].plot(submission_df['DateTime'],
+                          submission_df[forecast_col],
+                          label=f'December 2016 ({model_name} Forecast)',
+                          color=colors[model_name],
+                          linewidth=2)
+
+            # Add confidence intervals
+            if model_info.get('has_ci', True):  # True for ARIMA and UCM
+                if model_name == 'UCM':
+                    # Use the model's original confidence intervals but bound them
+                    ci_df = model_info['ci_df']
+                    lower_bound = np.maximum(0, ci_df[model_info['lower_col']])
+                    upper_bound = ci_df[model_info['upper_col']]
+
+                    # Add seasonal pattern to the confidence intervals
+                    daily_pattern = november_data.groupby(november_data.index.hour)['X'].std()
+                    weekly_pattern = november_data.groupby(november_data.index.dayofweek)['X'].std()
+
+                    # Apply patterns to bounds
+                    for hour in range(24):
+                        hour_mask = ci_df['DateTime'].dt.hour == hour
+                        daily_factor = daily_pattern[hour] / daily_pattern.mean()
+                        lower_bound.loc[hour_mask] *= daily_factor
+                        upper_bound.loc[hour_mask] *= daily_factor
+
+                    for day in range(7):
+                        day_mask = ci_df['DateTime'].dt.dayofweek == day
+                        weekly_factor = weekly_pattern[day] / weekly_pattern.mean()
+                        lower_bound.loc[day_mask] *= weekly_factor
+                        upper_bound.loc[day_mask] *= weekly_factor
+
+                    # Apply Christmas dampening to confidence intervals
+                    christmas_mask = (
+                        (ci_df['DateTime'].dt.day.isin([24, 25])) &
+                        (ci_df['DateTime'].dt.hour.between(6, 15))
+                    )
+                    lower_bound.loc[christmas_mask] *= 0.55
+                    upper_bound.loc[christmas_mask] *= 0.55
+
+                    axes[idx].fill_between(
+                        ci_df['DateTime'],
+                        lower_bound,
+                        upper_bound,
+                        color=colors[model_name],
+                        alpha=0.2,
+                        label='95% Confidence Interval'
+                    )
+                else:  # ARIMA
+                    ci_df = model_info['ci_df']
+                    lower_bound = np.maximum(0, ci_df[model_info['lower_col']])
+                    upper_bound = ci_df[model_info['upper_col']]
+
+                    # Apply Christmas dampening to confidence intervals
+                    christmas_mask = (
+                        (ci_df['DateTime'].dt.day.isin([24, 25])) &
+                        (ci_df['DateTime'].dt.hour.between(6, 15))
+                    )
+                    lower_bound.loc[christmas_mask] *= 0.55
+                    upper_bound.loc[christmas_mask] *= 0.55
+
+                    axes[idx].fill_between(
+                        ci_df['DateTime'],
+                        lower_bound,
+                        upper_bound,
+                        color=colors[model_name],
+                        alpha=0.2,
+                        label='95% Confidence Interval'
+                    )
+            else:  # For ML model
+                std_dev = november_data['X'].std()
+                axes[idx].fill_between(
+                    submission_df['DateTime'],
+                    np.maximum(0, submission_df[forecast_col] - 1.96 * std_dev),
+                    submission_df[forecast_col] + 1.96 * std_dev,
+                    color=colors[model_name],
+                    alpha=0.2,
+                    label='Approximate 95% Prediction Interval'
+                )
+
+            # Customize plot
+            axes[idx].set_title(f'{model_name} Model: November Actuals and December Forecast')
+            axes[idx].set_xlabel('Date')
+            axes[idx].set_ylabel('Traffic Congestion')
+            axes[idx].legend()
+            axes[idx].grid(True, alpha=0.3)
+
+            # Format x-axis
+            axes[idx].xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+            axes[idx].tick_params(axis='x', rotation=45)
+
+            # Add statistics
+            nov_stats = f"November Stats:\nMean: {november_data['X'].mean():.2f}\nStd: {november_data['X'].std():.2f}"
+            dec_stats = f"December Stats:\nMean: {submission_df[forecast_col].mean():.2f}\nStd: {submission_df[forecast_col].std():.2f}"
+
+            # Add text boxes
+            axes[idx].text(0.02, 0.98, nov_stats,
+                          transform=axes[idx].transAxes,
+                          verticalalignment='top',
+                          bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.5))
+
+            axes[idx].text(0.98, 0.98, dec_stats,
+                          transform=axes[idx].transAxes,
+                          verticalalignment='top',
+                          horizontalalignment='right',
+                          bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.5))
+
+        plt.tight_layout()
+        plt.show()
+
+    except Exception as e:
+        print(f"Error occurred: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+# Execute the plot
+plot_november_december_transition_with_ci()
+
