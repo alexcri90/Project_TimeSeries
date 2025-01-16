@@ -1,0 +1,295 @@
+\documentclass{article}
+\usepackage{graphicx} % Required for inserting images
+\usepackage{amsmath}      % For advanced math formatting
+\usepackage{amssymb}      % For mathematical symbols
+\usepackage{mathtools}    % Enhanced math formatting
+\usepackage{geometry}     % For page margins
+\usepackage{hyperref}     % For clickable references
+\usepackage{booktabs}     % For professional tables
+\usepackage{natbib}       % For citations
+\usepackage[font=small]{caption}
+
+% Page setup
+\geometry{
+    a4paper,
+    margin=2.5cm
+}
+
+\title{Traffic Congestion Analysis}
+\author{Alexandre Crivellari - 902064}
+\date{January 2025}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+
+\subsection{Project Overview and Objectives}
+Traffic congestion prediction represents a critical component in modern urban traffic management systems. This study focuses on developing and comparing multiple forecasting approaches for predicting traffic congestion levels on a major U.S. freeway. The primary objective is to generate accurate hourly predictions using a combination of statistical and machine learning methods, providing insights into traffic patterns and their underlying determinants.
+
+Our analysis employs three distinct modeling approaches: a Seasonal Autoregressive Integrated Moving Average model with exogenous variables (SARIMAX), an Unobserved Components Model (UCM), and an XGBoost-based machine learning model. Each approach offers unique advantages in capturing different aspects of the time series dynamics, from explicit seasonal patterns to complex non-linear relationships.
+
+\subsection{Description of the Traffic Congestion Dataset}
+The dataset comprises hourly traffic congestion measurements spanning from January 2015 through November 2016, recorded as a continuous time series. The congestion indicator, denoted as $X_t$, represents a normalized measure of traffic density, where higher values indicate increased congestion levels. Each observation is timestamped with both date and hour components, allowing for detailed temporal pattern analysis.
+
+\subsection{Forecasting Challenge: One Month of Hourly Predictions}
+The core challenge of this project involves generating 744 consecutive hourly forecasts, representing a complete month of traffic congestion predictions. This extended forecast horizon presents several technical challenges:
+
+\begin{enumerate}
+    \item Long-range dependency modeling: Traffic patterns exhibit both daily (24-hour) and weekly seasonality
+    \item Accumulated uncertainty: Forecast uncertainty naturally grows with the prediction horizon
+    \item Special period handling: The forecast period may include holidays or other special events that could affect traffic patterns
+\end{enumerate}
+
+\subsection{Overview of Selected Modeling Approaches}
+Our methodology employs three complementary approaches:
+
+1. SARIMAX Modeling: We implement a SARIMAX(2,1,2)(1,1,1)$_{24}$ model with weekly pattern exogenous variables:
+   \begin{equation}
+   (1-\phi_1B-\phi_2B^2)(1-\Phi_1B^{24})(1-B)(1-B^{24})X_t = (1+\theta_1B+\theta_2B^2)(1+\Theta_1B^{24})\varepsilon_t + \beta W_t
+   \end{equation}
+   where $B$ is the backshift operator, $W_t$ represents the weekly seasonal pattern through a phase-adjusted sine component.
+
+2. Unobserved Components Model (UCM): This approach decomposes the series with a local level and stochastic daily seasonality:
+   \begin{equation}
+   X_t = \mu_t + \gamma_t + \beta W_t + \varepsilon_t, \quad \mu_t = \mu_{t-1} + \eta_t
+   \end{equation}
+   where $\mu_t$ is the local level component, $\gamma_t$ represents the 24-hour stochastic seasonal component, and $W_t$ captures the weekly pattern through exogenous variables.
+
+3. XGBoost Model: We employ an extreme gradient boosting framework with specific lag features:
+   \begin{equation}
+   \hat{X}_t = f(X_{t-1}, X_{t-24}, W_t) = \sum_{k=1}^K f_k(X_{t-1}, X_{t-24}, W_t)
+   \end{equation}
+   where $f_k$ represents individual tree predictors trained on one-hour and 24-hour lags, along with the weekly pattern features $W_t$.
+
+Each approach leverages different aspects of the time series structure: SARIMAX captures linear dependencies and explicit seasonality, UCM handles evolving patterns through its state-space formulation, and XGBoost captures complex non-linear relationships through its tree-based architecture.
+
+\section{Data Understanding and Preprocessing}
+
+\subsection{Dataset Structure and Components}
+The traffic congestion data is structured as a regular time series with hourly granularity, spanning from January 2015 through November 2016. The dataset comprises four primary fields:
+
+\begin{itemize}
+\item \texttt{DateTime}: A timestamp field combining both date and hour information, serving as the primary temporal index
+\item \texttt{Date}: The calendar date component in YYYY-MM-DD format
+\item \texttt{Hour}: An integer field (0-23) representing the hour of day
+\item \texttt{X}: The target variable representing traffic congestion levels
+\end{itemize}
+
+The time series exhibits several structural characteristics that influence our modeling approach:
+
+\begin{itemize}
+\item \textbf{Temporal Resolution}: Hourly measurements provide sufficient granularity to capture both intra-day variations and longer-term patterns
+\item \textbf{Regular Spacing}: Observations are consistently spaced at one-hour intervals, simplifying the application of traditional time series methods
+\item \textbf{Multiple Seasonality}: The data structure inherently supports analysis of:
+  \begin{itemize}
+  \item Daily patterns (24-hour cycle)
+  \item Weekly patterns (168-hour cycle)
+  \item Monthly variations (approximately 720-hour cycle)
+  \end{itemize}
+\end{itemize}
+
+The target variable X represents a normalized measure of traffic congestion, with several key properties:
+\begin{itemize}
+\item \textbf{Range}: Values are non-negative, reflecting physical constraints of traffic measurement
+\item \textbf{Scale}: The measurements appear to be normalized, facilitating direct comparison across different time periods
+\item \textbf{Resolution}: Sufficient numerical precision to capture subtle variations in congestion levels
+\end{itemize}
+
+This structured format enables the application of various time series analysis techniques while maintaining the interpretability of the results. The combination of both date and hour components allows for flexible aggregation and pattern analysis at multiple temporal scales, which proves crucial for our multi-model forecasting approach.
+
+\subsection{Data Quality Assessment}
+A comprehensive assessment of data quality revealed several characteristics requiring attention for robust time series analysis. The evaluation focused on three key aspects: missing value patterns, edge cases, and data integrity.
+
+\subsubsection{Missing Values Analysis}
+The time series data exhibits specific patterns of missing values that required systematic treatment:
+\begin{itemize}
+    \item \textbf{Daylight Saving Time Gaps}: Two specific timestamps were identified as missing:
+    \begin{itemize}
+        \item March 29, 2015, 02:00:00
+        \item March 27, 2016, 02:00:00
+    \end{itemize}
+    These gaps correspond to daylight saving time transitions and were addressed through localized interpolation using adjacent day values.
+\end{itemize}
+
+\subsubsection{Treatment of Edge Cases}
+Several edge cases were identified and treated:
+\begin{enumerate}
+    \item \textbf{Duplicate Timestamps}: A small number of duplicate timestamps were detected in the dataset. These were resolved by:
+    \begin{itemize}
+        \item Computing the mean value for X at identical timestamps
+        \item Retaining the first occurrence of date and hour information
+        \item Ensuring chronological ordering after deduplication
+    \end{itemize}
+    
+    \item \textbf{Outlier Analysis}: Using the Interquartile Range (IQR) method:
+    \begin{equation}
+        \text{Outlier if } X < (Q_1 - 1.5 \times \text{IQR}) \text{ or } X > (Q_3 + 1.5 \times \text{IQR})
+    \end{equation}
+    where $Q_1$ and $Q_3$ represent the first and third quartiles respectively.
+\end{enumerate}
+
+\subsubsection{Data Integrity Checks}
+Several validation procedures were implemented to ensure data integrity:
+
+\begin{enumerate}
+    \item \textbf{Time Series Continuity}: A verification process confirmed that observations where consistently hourly spaced and in the proper chronological order.
+    
+    \item \textbf{Value Distribution Analysis}: Values for the traffic congestion indicator where confirmed non-negative and not-outliers.
+\end{enumerate}
+
+Following these quality assessments, appropriate cleaning procedures were implemented to ensure data reliability while preserving the inherent characteristics of the traffic patterns. The cleaned dataset maintains the temporal integrity necessary for accurate time series modeling while addressing potential sources of bias or error in the original data.
+
+\section{Exploratory Data Analysis}
+
+\subsection{Temporal Pattern Analysis}
+Analysis of the traffic congestion time series reveals complex temporal dynamics operating at multiple scales. Examination of the complete time series spanning from January 2015 to November 2016 shows a remarkably consistent pattern of daily fluctuations, with congestion values typically ranging between 0 and 0.4. This stability in the overall pattern suggests strong seasonal components that persist across years.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{time_series_full.png}
+    \caption{Time series plot of traffic congestion (full period and last two months). The upper panel shows the complete time series from 2015 to 2016, while the lower panel provides a detailed view of the final two months, highlighting the daily pattern structure.}
+    \label{fig:time_series}
+\end{figure}
+
+A closer examination of the daily traffic patterns reveals a pronounced circadian rhythm in congestion levels. The average daily pattern exhibits a sharp morning peak between 07:00 and 08:00, reaching maximum congestion values around 0.12. This morning surge is followed by a gradual decline throughout the afternoon hours, with congestion levels stabilizing at moderate values before decreasing to their lowest points during the nighttime hours (00:00-04:00).
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{daily_weekly_patterns.png}
+    \caption{Average daily and weekly patterns in traffic congestion. The upper panel shows the 24-hour cycle with its characteristic morning peak, while the lower panel illustrates the weekly variation from Monday (0) to Sunday (6).}
+    \label{fig:patterns}
+\end{figure}
+
+The weekly cycle presents another significant temporal pattern in the data. Traffic congestion tends to peak during the midweek period, specifically on Tuesdays and Wednesdays, with average values around 0.057. From this peak, congestion levels gradually decrease towards the weekend, reaching their lowest points on Sundays with values around 0.03. This pattern clearly reflects the influence of workplace commuting on traffic patterns, with reduced congestion during weekends when fewer people travel for work.
+
+These systematic patterns in both daily and weekly cycles suggest the need for a modeling approach that can effectively capture multiple seasonal components. The consistency of these patterns also indicates that while the time series exhibits clear seasonality at both daily and weekly scales, the underlying process generating these patterns remains relatively stable over the observed period.
+
+\subsection{Statistical Properties}
+Decomposition of the time series into its constituent components reveals the underlying structure of the traffic congestion patterns. A seasonal decomposition using a 24-hour period was performed to separate the series into trend, seasonal, and residual components.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{seasonal_decomp.png}
+    \caption{Seasonal decomposition of the traffic congestion time series showing the observed data, trend component, seasonal pattern, and residuals.}
+    \label{fig:decomposition}
+\end{figure}
+
+The trend component exhibits moderate fluctuations around a relatively stable mean, suggesting no strong long-term directional movement in congestion levels. This stability in the trend indicates that while daily and weekly patterns are prominent, the overall congestion level has remained consistent throughout the observation period.
+
+The seasonal component displays a remarkably regular pattern, capturing the daily cycle of traffic congestion. This regularity reinforces our earlier observations about the strong daily patterns and suggests that the 24-hour seasonality is a fundamental characteristic of the series that should be explicitly incorporated in our modeling approach.
+
+To formally assess the stationarity of the series, we conducted an Augmented Dickey-Fuller (ADF) test. The test yielded a test statistic of -15.71, substantially more negative than the critical values (-3.431, -2.862, and -2.567 at the 1\%, 5\%, and 10\% significance levels, respectively). The corresponding p-value of 1.37×10$^{-28}$ provides overwhelming evidence against the presence of a unit root, indicating that the series is stationary after accounting for its seasonal components.
+
+The residual component, obtained after removing both trend and seasonal effects, exhibits several notable characteristics:
+\begin{itemize}
+    \item Relatively constant variance across the observation period, suggesting homoscedasticity
+    \item No obvious patterns or systematic behavior, indicating successful removal of seasonal components
+    \item Occasional spikes that likely correspond to unusual traffic events or anomalies
+\end{itemize}
+
+These statistical properties have important implications for our modeling strategy. The strong stationarity evidence supports the use of standard time series models, while the clear seasonal structure suggests the need for explicit seasonal components. The well-behaved residuals indicate that, after accounting for trend and seasonality, the remaining variations can be effectively modeled using standard error structures.
+
+\subsubsection{Autocorrelation Analysis}
+To further understand the temporal dependencies in the series of traffic congestion, we performed a comprehensive correlation analysis using both the autocorrelation function (ACF) and the partial autocorrelation function (PACF) on the original series and various transformations.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{acf_pacf_original}
+    \caption{ACF and PACF of the original series, showing strong periodic correlations at daily (24-hour) intervals.}
+    \label{fig:acf_original}
+\end{figure}
+
+The ACF of the original series exhibits a distinctive pattern with peaks at regular 24-hour intervals, confirming the strong daily seasonality identified in our decomposition analysis. The slow decay in these peaks suggests the need for seasonal differencing. The PACF shows significant spikes at the first few lags, indicating potential AR(2) behavior in the short-term dynamics.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{acf_pacf_diff1}
+    \caption{ACF and PACF after first-order differencing, revealing the persistence of seasonal patterns.}
+    \label{fig:acf_diff1}
+\end{figure}
+
+After applying first-order differencing, the ACF and PACF plots reveal that while the overall correlation structure is reduced, significant seasonal correlations persist. This suggests that while regular differencing helps address some of the non-stationarity, it alone is insufficient to capture the series' full dynamics.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{acf_pacf_seasonal}
+    \caption{ACF and PACF of the seasonally differenced series (24-hour period), showing reduced seasonal dependencies.}
+    \label{fig:acf_seasonal}
+\end{figure}
+
+The seasonally differenced series (lag-24) shows a marked reduction in the periodic correlation structure. The ACF exhibits a more rapid decay, while the PACF suggests the presence of both regular and seasonal autoregressive components. This transformation effectively addresses the strong daily seasonality observed in the original series.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{acf_pacf_both}
+    \caption{ACF and PACF after both regular and seasonal differencing, displaying minimal residual correlation structure.}
+    \label{fig:acf_both}
+\end{figure}
+
+Applying both regular and seasonal differencing produces the most stationary series, with minimal residual correlation structure. The resulting ACF and PACF patterns suggest that a SARIMA model with orders (2,1,2) for the regular component and (1,1,1)$_{24}$ for the seasonal component would be appropriate, as these orders capture the remaining short-term and seasonal dynamics while maintaining model parsimony.
+
+\subsubsection{SARIMA Order Selection}
+The determination of SARIMA(2,1,2)(1,1,1)$_{24}$ orders follows from a systematic analysis of both regular and seasonal components in the correlation structure. While the ADF test indicates the series is stationary (test statistic -15.71, p-value 1.37×10$^{-28}$), the strong seasonal patterns in the data suggest that differencing can still improve model performance by simplifying the correlation structure.
+
+\textbf{Regular Component (2,1,2):}
+\begin{itemize}
+    \item Despite statistical stationarity, we choose differencing order $d=1$ to reduce the complexity of the autocorrelation structure and simplify the model specification.
+    \item The AR order $p=2$ is determined from the PACF of the differenced series, which shows significant spikes at lags 1 and 2, followed by a sharp cut-off.
+    \item The MA order $q=2$ is selected based on the ACF showing significant correlations at the first two lags, suggesting a second-order moving average process is needed to capture the short-term correlation structure.
+\end{itemize}
+
+\textbf{Seasonal Component (1,1,1)$_{24}$:}
+\begin{itemize}
+    \item The seasonal differencing order $D=1$ is chosen to address the strong periodic correlations at multiples of 24 hours, making the seasonal pattern more manageable.
+    \item The seasonal AR order $P=1$ is determined from the PACF at seasonal lags, which shows a significant spike at lag 24 followed by a decay.
+    \item The seasonal MA order $Q=1$ is selected based on the ACF at seasonal lags, which exhibits a similar pattern requiring one seasonal moving average term.
+\end{itemize}
+
+This specification achieves a balance between model complexity and goodness of fit. While the series is technically stationary, the chosen differencing orders help simplify the underlying patterns, allowing the ARMA components to more effectively capture both the short-term dynamics and daily seasonality.
+
+\subsection{Extended Pattern Analysis}
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{pattern_heatmaps.png}
+    \caption{Pattern analysis through heatmaps: (a) Average daily pattern showing peak congestion hours, (b) Weekly pattern heatmap displaying workday vs. weekend differences, (c) Monthly pattern heatmap revealing seasonal variations.}
+    \label{fig:heatmaps}
+\end{figure}
+
+To further investigate the complex temporal dynamics of traffic congestion, we employed heatmap visualizations that reveal the intricate interplay between different time scales. Figure \ref{fig:heatmaps} presents three complementary views of the temporal patterns in our data.
+
+The daily pattern heatmap reveals a pronounced morning peak between 07:00 and 09:00, with congestion values reaching their maximum around 08:00. This peak is followed by a gradual decline throughout the day, with a subtle secondary peak during the afternoon rush hour (16:00-18:00). The lowest congestion levels are consistently observed during the early morning hours (02:00-05:00).
+
+The weekly pattern heatmap offers a particularly insightful visualization of the workday-weekend dichotomy. Workdays (represented by rows 0-4) show consistently higher congestion levels during peak hours, with the intensity gradually diminishing towards the weekend. Rows 5 and 6, corresponding to Saturday and Sunday, display markedly lower congestion levels throughout the day, though still maintaining a vestigial morning peak structure.
+
+The monthly pattern heatmap extends our understanding to seasonal variations throughout the year. While the basic daily pattern remains consistent across months, subtle variations in intensity can be observed. This visualization suggests that while the fundamental rhythm of traffic congestion is primarily driven by daily and weekly cycles, there are also longer-term patterns that might influence the overall congestion levels.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{acf_pacf_extended.png}
+    \caption{Extended ACF and PACF analysis showing correlations at different time scales: daily (24 hours), weekly (168 hours), and monthly (720 hours) patterns.}
+    \label{fig:acf_extended}
+\end{figure}
+
+The extended correlation analysis (Figure \ref{fig:acf_extended}) provides a quantitative confirmation of these visual patterns. The ACF exhibits clear periodicity at multiple time scales:
+
+\begin{itemize}
+    \item \textbf{Daily Periodicity}: Strong correlations at 24-hour intervals, with peaks gradually diminishing but remaining significant.
+    \item \textbf{Weekly Periodicity}: Secondary peaks at 168-hour (7-day) intervals, indicating the weekly cycle's persistence.
+    \item \textbf{Monthly Effects}: Weaker but detectable correlations at approximately 720-hour intervals, suggesting potential monthly patterns.
+\end{itemize}
+
+The PACF analysis reveals the direct correlations at these lags after removing the effects of intermediate observations. The sharp cut-off in the PACF after the first few lags, combined with the oscillating decay in the ACF, suggests that a combination of autoregressive and moving average terms will be necessary to capture these multi-scale patterns effectively.
+
+This rich temporal structure informs our modeling strategy in several ways:
+\begin{enumerate}
+    \item The need for explicit handling of both daily and weekly seasonality
+    \item The importance of capturing the sharp morning peak characteristics
+    \item The requirement for flexibility in modeling different intensities between workdays and weekends
+    \item The potential value of incorporating longer-term variations in the model structure
+\end{enumerate}
+
+
+
+\end{document}
