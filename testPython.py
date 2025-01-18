@@ -1,16 +1,31 @@
 import numpy as np
+import matplotlib.pyplot as plt
 
-# Generate MA(2) process
-n = 1000
-epsilon = np.random.normal(0, 1, n+2)
-y = epsilon[2:] + 0.6*epsilon[1:-1] + 0.3*epsilon[:-2]
+# Generate multiple random walks
+n_steps = 100
+n_walks = 5
 
-# Theoretical ACF values for first few lags
-acf_theoretical = np.zeros(4)
-acf_theoretical[0] = 1  # lag 0
-acf_theoretical[1] = (0.6 + 0.6*0.3)/(1 + 0.6**2 + 0.3**2)  # lag 1
-acf_theoretical[2] = 0.3/(1 + 0.6**2 + 0.3**2)  # lag 2
-acf_theoretical[3] = 0  # lag 3
+# Create the walks
+walks = np.cumsum(np.random.normal(0, 1, (n_walks, n_steps)), axis=1)
 
-# Sample ACF values for first few lags
-acf_sample = np.zeros(4)
+# Calculate variances at each time point
+variances = np.var(walks, axis=0)
+
+# Create subplots
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+
+# Plot random walks
+for walk in walks:
+    ax1.plot(walk, alpha=0.7)
+ax1.set_title('Multiple Random Walks')
+ax1.set_xlabel('Time')
+ax1.set_ylabel('Value')
+
+# Plot variances
+ax2.plot(variances, color='red')
+ax2.set_title('Variance Across Time')
+ax2.set_xlabel('Time')
+ax2.set_ylabel('Variance')
+
+plt.tight_layout()
+plt.show()
